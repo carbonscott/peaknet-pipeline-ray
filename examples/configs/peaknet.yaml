@@ -1,0 +1,54 @@
+# Clean PeakNet Pipeline Configuration
+# Framework-agnostic configuration without Hydra/OmegaConf dependencies
+
+model:
+  weights_path: null  # No weights = randomly initialized model (but REAL GPU computation!)
+  
+  # Simplified PeakNet configuration - no complex nested structures
+  peaknet_config:
+    model:
+      # Basic model parameters
+      image_size: 1920
+      num_channels: 1
+      num_classes: 2
+      
+      # Backbone configuration
+      backbone_hidden_sizes: [96, 192, 384, 768]
+      backbone_depths: [3, 3, 9, 3]
+      
+      # BiFPN configuration  
+      bifpn_num_blocks: 2
+      bifpn_num_features: 256
+      
+      # Segmentation head configuration
+      seg_out_channels: 256
+      
+      # Other settings
+      from_scratch: false
+
+runtime:
+  max_actors: 9           # Multi-GPU profiling
+  batch_size: 16          # Reasonable for large images  
+  num_producers: 8        # Multiple producers for throughput
+  batches_per_producer: 32 # 32 * 8 producers = 256 batches total
+  total_samples: 4096     # Sufficient for profiling (reduced for initial test)
+  inter_batch_delay: 0.01 # Moderate streaming rate
+
+data:
+  shape: [1, 1920, 1920]  # Full resolution as requested
+  input_channels: 1       # Single channel grayscale - typical for crystallography
+
+system:
+  min_gpus: 1             # Minimum GPUs required
+  skip_gpu_validation: false
+  pin_memory: true        # Better GPU transfer performance 
+  verify_actors: true     # Verify GPU health
+
+profiling:
+  enable_profiling: true  # NSys profiling enabled for performance analysis
+  output_dir: "./profiling_results"
+
+output:
+  output_dir: "./test_results"
+  verbose: true           # Detailed output for analysis
+  quiet: false
