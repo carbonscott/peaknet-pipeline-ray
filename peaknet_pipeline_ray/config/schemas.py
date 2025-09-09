@@ -65,19 +65,19 @@ class PipelineConfig:
     system: SystemConfig = field(default_factory=SystemConfig)
     profiling: ProfilingConfig = field(default_factory=ProfilingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
-    
+
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'PipelineConfig':
         """Load configuration from YAML file."""
         yaml_path = Path(yaml_path)
         if not yaml_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {yaml_path}")
-            
+
         with open(yaml_path, 'r') as f:
             config_dict = yaml.safe_load(f)
-        
+
         return cls.from_dict(config_dict)
-    
+
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'PipelineConfig':
         """Load configuration from dictionary."""
@@ -88,7 +88,7 @@ class PipelineConfig:
         system_config = SystemConfig(**config_dict.get('system', {}))
         profiling_config = ProfilingConfig(**config_dict.get('profiling', {}))
         output_config = OutputConfig(**config_dict.get('output', {}))
-        
+
         return cls(
             model=model_config,
             runtime=runtime_config,
@@ -97,7 +97,7 @@ class PipelineConfig:
             profiling=profiling_config,
             output=output_config
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
         return {
@@ -134,7 +134,7 @@ class PipelineConfig:
                 'quiet': self.output.quiet
             }
         }
-    
+
     def to_yaml(self, yaml_path: str) -> None:
         """Save configuration to YAML file."""
         with open(yaml_path, 'w') as f:

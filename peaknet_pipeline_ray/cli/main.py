@@ -20,14 +20,14 @@ def create_parser() -> argparse.ArgumentParser:
         description='PeakNet Pipeline Ray - Scalable ML inference with streaming data',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
     # Configuration file
     parser.add_argument(
         '--config',
         type=str,
         help='Path to YAML configuration file (e.g., examples/configs/production.yaml)'
     )
-    
+
     # Model configuration
     model_group = parser.add_argument_group('model', 'Model configuration options')
     model_group.add_argument(
@@ -42,7 +42,7 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         help='Path to pretrained model weights file'
     )
-    
+
     # Runtime configuration
     runtime_group = parser.add_argument_group('runtime', 'Pipeline runtime options')
     runtime_group.add_argument(
@@ -75,7 +75,7 @@ def create_parser() -> argparse.ArgumentParser:
         type=float,
         help='Delay between batches in seconds'
     )
-    
+
     # Data configuration
     data_group = parser.add_argument_group('data', 'Data configuration options')
     data_group.add_argument(
@@ -90,7 +90,7 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         help='Number of input channels'
     )
-    
+
     # System configuration
     system_group = parser.add_argument_group('system', 'System configuration options')
     system_group.add_argument(
@@ -113,7 +113,7 @@ def create_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='Disable actor verification'
     )
-    
+
     # Profiling and output
     profiling_group = parser.add_argument_group('profiling', 'Profiling and output options')
     profiling_group.add_argument(
@@ -141,7 +141,7 @@ def create_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='Enable quiet mode (minimal output)'
     )
-    
+
     return parser
 
 
@@ -156,13 +156,13 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config = PipelineConfig.from_yaml(str(config_path))
     else:
         config = PipelineConfig()
-    
+
     # Apply command-line overrides
     if args.model_yaml_path is not None:
         config.model.yaml_path = args.model_yaml_path
     if args.model_weights_path is not None:
         config.model.weights_path = args.model_weights_path
-    
+
     if args.max_actors is not None:
         config.runtime.max_actors = args.max_actors
     if args.batch_size is not None:
@@ -175,12 +175,12 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config.runtime.batches_per_producer = args.batches_per_producer
     if args.inter_batch_delay is not None:
         config.runtime.inter_batch_delay = args.inter_batch_delay
-    
+
     if args.shape is not None:
         config.data.shape = tuple(args.shape)
     if args.input_channels is not None:
         config.data.input_channels = args.input_channels
-    
+
     if args.min_gpus is not None:
         config.system.min_gpus = args.min_gpus
     if args.skip_gpu_validation:
@@ -189,7 +189,7 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config.system.pin_memory = False
     if args.no_verify_actors:
         config.system.verify_actors = False
-    
+
     if args.enable_profiling:
         config.profiling.enable_profiling = True
     if args.profiling_output_dir is not None:
@@ -200,7 +200,7 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config.output.verbose = True
     if args.quiet:
         config.output.quiet = True
-    
+
     return config
 
 
@@ -208,16 +208,16 @@ def main(argv: Optional[list] = None) -> int:
     """Main entry point for the CLI."""
     parser = create_parser()
     args = parser.parse_args(argv)
-    
+
     # Validate conflicting arguments
     if args.verbose and args.quiet:
         print("Error: --verbose and --quiet are mutually exclusive", file=sys.stderr)
         return 1
-    
+
     try:
         # Load configuration
         config = load_config(args)
-        
+
         # Print configuration if verbose
         if config.output.verbose:
             print("Pipeline Configuration:")
@@ -229,17 +229,17 @@ def main(argv: Optional[list] = None) -> int:
             print(f"  Data shape: {config.data.shape}")
             print(f"  Min GPUs: {config.system.min_gpus}")
             print(f"  Profiling: {config.profiling.enable_profiling}")
-        
+
         # Import and run the actual pipeline
         from ..pipeline import PeakNetPipeline
-        
+
         # Create and run pipeline
         pipeline = PeakNetPipeline(config)
         results = pipeline.run()
-        
+
         # Return appropriate exit code
         return 0 if results.success else 1
-        
+
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

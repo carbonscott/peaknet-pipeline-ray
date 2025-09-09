@@ -3,7 +3,7 @@
 
 model:
   weights_path: null  # No weights = randomly initialized model (but REAL GPU computation!)
-  
+
   # Simplified PeakNet configuration - no complex nested structures
   peaknet_config:
     model:
@@ -11,18 +11,18 @@ model:
       image_size: 1920
       num_channels: 1
       num_classes: 2
-      
+
       # Backbone configuration
       backbone_hidden_sizes: [96, 192, 384, 768]
       backbone_depths: [3, 3, 9, 3]
-      
+
       # BiFPN configuration  
       bifpn_num_blocks: 2
       bifpn_num_features: 256
-      
+
       # Segmentation head configuration
       seg_out_channels: 256
-      
+
       # Other settings
       from_scratch: false
 

@@ -56,7 +56,7 @@ class PeakNetForProfiling(nn.Module):
         except Exception as e:
             self.num_classes = num_classes
             print(f"⚠ Error accessing model config ({e}), using default num_classes: {num_classes}")
-        
+
         # Add device verification
         try:
             model_device = next(peaknet_model.parameters()).device
@@ -101,12 +101,12 @@ def create_peaknet_model(
 ) -> PeakNetForProfiling:
     """
     Create PeakNet model from configuration dictionary.
-    
+
     Args:
         peaknet_config: PeakNet configuration dict with model parameters
         weights_path: Optional path to pre-trained weights
         device: Device to place model on
-        
+
     Returns:
         PeakNetForProfiling model ready for inference
     """
@@ -120,17 +120,17 @@ def create_peaknet_model(
 
     # Extract model configuration - should be under 'model' key to match original structure
     model_config = peaknet_config.get("model", peaknet_config)
-    
+
     # Create simplified configuration from dict
     simple_config = create_peaknet_config_from_dict(model_config)
-    
+
     print(f"Model image_size: {simple_config.image_size}")
     print(f"Model num_channels: {simple_config.num_channels}")
     print(f"Model num_classes: {simple_config.num_classes}")
 
     # Convert to PeakNet configuration objects
     backbone_config, bifpn_config, seg_head_config = simple_config.to_peaknet_configs()
-    
+
     # Create PeakNet configuration
     peaknet_model_config = PeakNetConfig(
         backbone=backbone_config,
@@ -158,7 +158,7 @@ def create_peaknet_model(
     # Create profiling wrapper
     wrapper = PeakNetForProfiling(model, num_classes=simple_config.num_classes)
     wrapper = wrapper.to(device)
-    
+
     # Set to eval mode for consistent timing
     wrapper.eval()
 
@@ -168,26 +168,26 @@ def create_peaknet_model(
 def get_peaknet_shapes(peaknet_config: dict, batch_size: int = 1) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
     """
     Calculate input and output shapes from PeakNet configuration.
-    
+
     Args:
         peaknet_config: PeakNet configuration dict with model parameters
         batch_size: Batch size
-        
+
     Returns:
         tuple: (input_shape, output_shape) both as (batch_size, channels, height, width)
     """
     # Import our native configuration
     from ..config.peaknet_config import create_peaknet_config_from_dict
-    
+
     # Extract model configuration - should be under 'model' key to match original structure
     model_config = peaknet_config.get("model", peaknet_config)
-    
+
     # Create simplified configuration from dict
     simple_config = create_peaknet_config_from_dict(model_config)
-    
+
     input_shape = (batch_size, simple_config.num_channels, simple_config.image_size, simple_config.image_size)
     output_shape = (batch_size, simple_config.num_classes, simple_config.image_size, simple_config.image_size)
-    
+
     return input_shape, output_shape
 
 

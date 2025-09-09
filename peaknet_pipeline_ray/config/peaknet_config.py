@@ -67,24 +67,24 @@ class SimplePeakNetConfig:
     image_size: int = 1920
     num_channels: int = 1
     num_classes: int = 2
-    
+
     # Backbone configuration
     backbone_hidden_sizes: List[int] = field(default_factory=lambda: [96, 192, 384, 768])
     backbone_depths: List[int] = field(default_factory=lambda: [3, 3, 9, 3])
-    
+
     # BiFPN configuration
     bifpn_num_blocks: int = 2
     bifpn_num_features: int = 256
-    
+
     # Segmentation head configuration
     seg_out_channels: int = 256
-    
+
     # Other model settings
     from_scratch: bool = False
-    
+
     def to_peaknet_configs(self) -> tuple:
         """Convert to the PeakNet configuration objects.
-        
+
         Returns:
             tuple: (backbone_config, bifpn_config, seg_head_config)
         """
@@ -95,7 +95,7 @@ class SimplePeakNetConfig:
             from transformers.models.convnextv2.configuration_convnextv2 import ConvNextV2Config
         except ImportError as e:
             raise ImportError(f"PeakNet not available: {e}")
-        
+
         # Create ConvNext backbone configuration
         backbone_config = ConvNextV2Config(
             num_channels=self.num_channels,
@@ -111,11 +111,11 @@ class SimplePeakNetConfig:
             out_features=['stage1', 'stage2', 'stage3', 'stage4'],
             out_indices=None
         )
-        
+
         # Create BiFPN configuration
         bn_config = BNConfig(eps=1e-5, momentum=0.1)
         fusion_config = FusionConfig(eps=1e-5)
-        
+
         bifpn_block_config = BiFPNBlockConfig(
             base_level=4,
             num_levels=4,
@@ -126,12 +126,12 @@ class SimplePeakNetConfig:
             bn=bn_config,
             fusion=fusion_config
         )
-        
+
         bifpn_config = BiFPNConfig(
             num_blocks=self.bifpn_num_blocks,
             block=bifpn_block_config
         )
-        
+
         # Create segmentation head configuration
         seg_head_config = SegHeadConfig(
             num_classes=self.num_classes,
@@ -141,16 +141,16 @@ class SimplePeakNetConfig:
             uses_learned_upsample=False,
             up_scale_factor=[4, 8, 16, 32]
         )
-        
+
         return backbone_config, bifpn_config, seg_head_config
 
 
 def create_peaknet_config_from_dict(config_dict: Dict[str, Any]) -> SimplePeakNetConfig:
     """Create SimplePeakNetConfig from a dictionary (e.g., loaded from YAML).
-    
+
     Args:
         config_dict: Dictionary containing PeakNet configuration
-        
+
     Returns:
         SimplePeakNetConfig: Parsed configuration object
     """

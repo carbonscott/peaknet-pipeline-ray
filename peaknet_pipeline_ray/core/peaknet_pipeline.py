@@ -118,14 +118,14 @@ def get_gpu_info(gpu_id):
 def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_model=False, compile_mode='default'):
     """
     Create PeakNet model for compute simulation, or None for no-op.
-    
+
     Args:
         peaknet_config: PeakNet configuration dict with model parameters (None for no-op)
         weights_path: Path to model weights
         gpu_id: GPU device ID
         compile_model: Whether to compile the model
         compile_mode: Compilation mode
-    
+
     Returns:
         tuple: (model, input_shape, output_shape) or (None, None, None) for no-op
     """
@@ -150,12 +150,12 @@ def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_model=Fal
         input_shape = input_shape[1:]  # (C, H, W)
         output_shape = output_shape[1:]  # (num_classes, H, W)
         print(f"[DEBUG] Input shape: {input_shape}, Output shape: {output_shape}")
-        
+
         # COMPREHENSIVE MODEL DEVICE VALIDATION
         print(f"[DEBUG] Verifying PeakNet model components on GPU...")
         model_device = next(peaknet_model.parameters()).device
         print(f"[DEBUG] Overall model device: {model_device}")
-        
+
         # Verify model is on correct GPU
         assert model_device.type == 'cuda', f"Model not on GPU: {model_device}"
         assert model_device.index == gpu_id, f"Model on wrong GPU: {model_device}, expected cuda:{gpu_id}"
@@ -174,7 +174,7 @@ def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_model=Fal
             print("Warning: torch.compile not available (requires PyTorch 2.0+), using non-compiled model")
 
         return peaknet_model, input_shape, output_shape
-        
+
     except Exception as e:
         print(f"Error creating PeakNet model: {e}")
         return None, None, None
@@ -239,7 +239,7 @@ class DoubleBufferedPipeline:
             'A': torch.empty((batch_size, *output_shape), pin_memory=pin_memory),
             'B': torch.empty((batch_size, *output_shape), pin_memory=pin_memory)
         }
-        
+
         # DEVICE VALIDATION: Verify all GPU buffers are on correct device
         print(f"[DEBUG] Pipeline buffer validation:")
         for key in ['A', 'B']:
@@ -249,7 +249,7 @@ class DoubleBufferedPipeline:
             assert input_device == torch.device(f'cuda:{gpu_id}'), f"Input buffer {key} on wrong device: {input_device}"
             assert output_device == torch.device(f'cuda:{gpu_id}'), f"Output buffer {key} on wrong device: {output_device}"
         print(f"✓ All pipeline buffers verified on GPU {gpu_id}")
-        
+
         # Log buffer memory usage
         if torch.cuda.is_available():
             input_mem = self.gpu_input_buffers['A'].numel() * self.gpu_input_buffers['A'].element_size() * 2 / (1024**3)
@@ -311,42 +311,42 @@ class DoubleBufferedPipeline:
                 else:
                     # PeakNet model inference
                     valid_input_slice = gpu_input_buffer[:current_batch_size]
-                    
+
                     # GPU DEBUGGING: Add comprehensive device validation
                     input_device = valid_input_slice.device
                     model_device = next(self.model.parameters()).device
                     print(f"[DEBUG] Batch {batch_idx}: input tensor device: {input_device}")
                     print(f"[DEBUG] Batch {batch_idx}: model device: {model_device}")
-                    
+
                     # CRITICAL: Ensure both model and input are on GPU
                     assert input_device.type == 'cuda', f"Input tensor on {input_device}, expected CUDA"
                     assert model_device.type == 'cuda', f"Model on {model_device}, expected CUDA"
                     assert input_device == model_device, f"Device mismatch: input {input_device}, model {model_device}"
-                    
+
                     with torch.no_grad():
                         with nvtx.range(f"{nvtx_prefix}_model_forward_{batch_idx}"):
                             # Monitor GPU memory before inference
                             if torch.cuda.is_available():
                                 gpu_mem_before = torch.cuda.memory_allocated(input_device) / (1024**3)
                                 print(f"[DEBUG] GPU memory before inference: {gpu_mem_before:.2f} GB")
-                            
+
                             predictions = self.model(valid_input_slice)
-                            
+
                             # Verify output is on GPU
                             output_device = predictions.device
                             print(f"[DEBUG] Batch {batch_idx}: output tensor device: {output_device}")
                             assert output_device.type == 'cuda', f"Output tensor on {output_device}, expected CUDA"
-                            
+
                             # Monitor GPU memory after inference
                             if torch.cuda.is_available():
                                 gpu_mem_after = torch.cuda.memory_allocated(input_device) / (1024**3)
                                 print(f"[DEBUG] GPU memory after inference: {gpu_mem_after:.2f} GB")
-                            
+
                             # Store model output in output buffer
                             gpu_output_buffer[:current_batch_size].copy_(predictions)
                             # CRITICAL: Force compute completion for CUDA synchronization
                             _ = predictions.sum()
-                            
+
                             print(f"[DEBUG] Batch {batch_idx}: PeakNet forward pass completed on GPU")
 
                 # Record compute completion event for this specific buffer
