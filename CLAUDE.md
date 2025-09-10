@@ -1,3 +1,15 @@
+## Data processing pipeline
+
+As shown in the JPG illustration (`externals/PeakNet-Pipeline-Scratchpad.jpg`),
+the entire pipeline consists of 5 stages:
+- R stage: Data producer that is controlled by a proprietary MPI based process
+- Q1 stage: Queue that will be filled with data pushed from the R stage through
+  the socket (S), waiting to be consumed by the next P stage
+- P stage: the actual PeakNet inference process
+- Q2 stage: Queue that will be filled with output from the inference, and wait
+  to be consumed by the postprocessor in the next stage
+- W stage: The post processing stage that will eventually proudces files on disk
+
 ## Project Overview
 
 - **Goal**: Make a package to run machine leanring model inference for a
@@ -12,10 +24,8 @@
     processing based on these results in Ray's object store, but it is out of
     the scope to discuss the post processing)
 
-- The entire architecture that includes data source and post processing is
-  described in my hand-written scatch notes in
-  `PeakNet-Pipeline-Scratchpad.jpg`.  However, this package should focus on the
-  `Q1->P->Q2` process if you can understand my handwriting.
+NOTE: Stage 1, 2, and 3 are concepts in the PeakNet pipeline only.  They are
+only components within the process `Q1->P->Q2`.
 
 ### Past works
 
@@ -29,8 +39,11 @@
     command (this is doable in setup.py or maybe in toml too, but you know what
     to do).
 - **peaknet**
-  - Path: /sdf/home/c/cwang31/codes/peaknet
+  - Path: `/sdf/home/c/cwang31/codes/peaknet`
   - The peaknet library
+- **lclstream**
+  - Path: `/sdf/data/lcls/ds/prj/prjcwang31/results/software/lclstreamer`
+  - A library to function as the data producer in R stage.
 
 ### Where to develop the package
 
