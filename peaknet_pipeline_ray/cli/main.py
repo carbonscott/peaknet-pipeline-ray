@@ -233,9 +233,9 @@ def main(argv: Optional[list] = None) -> int:
         # Import and run the actual pipeline
         from ..pipeline import PeakNetPipeline
 
-        # Create and run pipeline
+        # Create and run streaming pipeline
         pipeline = PeakNetPipeline(config)
-        results = pipeline.run()
+        results = pipeline.run_streaming_pipeline()
 
         # Return appropriate exit code
         return 0 if results.success else 1

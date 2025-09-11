@@ -339,6 +339,176 @@ class PeakNetPipelineActorBase:
                 'gpu_id': self.gpu_id
             }
 
+    def process_from_queue(
+        self,
+        q1_manager,
+        q2_manager=None,
+        coordinator=None,
+        max_empty_polls: int = 10,
+        poll_timeout: float = 0.01,
+        memory_sync_interval: int = 100
+    ) -> Dict[str, Any]:
+        """
+        TRUE STREAMING: Process data continuously from queue without batch accumulation.
+        
+        CRITICAL DESIGN: This method preserves the double buffering by NEVER calling
+        pipeline.wait_for_completion() per batch. Only syncs at the very end or
+        periodically for memory management.
+        
+        Args:
+            q1_manager: Input queue manager to pull data from
+            q2_manager: Optional output queue manager to push results to
+            coordinator: Optional coordinator for termination logic
+            max_empty_polls: Check coordinator after N consecutive empty polls
+            poll_timeout: Timeout for queue polling in seconds
+            memory_sync_interval: Sync every N batches for memory management
+            
+        Returns:
+            Dictionary with processing statistics
+        """
+        with nvtx.range(f"ray_actor_stream_processing_gpu_{self.gpu_id}"):
+            logging.info(f"Actor {self.gpu_id}: Starting streaming from queue")
+            
+            processed_count = 0
+            consecutive_empty_polls = 0
+            start_time = time.time()
+            last_output_data = None
+            
+            while True:
+                # Pull single batch from queue (non-blocking with short timeout)
+                batch_data = q1_manager.get(timeout=poll_timeout)
+                
+                if batch_data is None:
+                    # Queue is empty
+                    consecutive_empty_polls += 1
+                    
+                    # Only check coordinator after multiple empty polls to avoid overhead
+                    if consecutive_empty_polls >= max_empty_polls:
+                        if coordinator is not None:
+                            should_stop = ray.get(coordinator.should_actor_shutdown.remote(queue_empty=True))
+                            if should_stop:
+                                logging.info(f"Actor {self.gpu_id}: Coordinator confirms shutdown")
+                                break
+                        else:
+                            # No coordinator - if we've seen data before and now empty, we're done
+                            if processed_count > 0:
+                                logging.info(f"Actor {self.gpu_id}: No coordinator, processed {processed_count} batches, queue empty - shutting down")
+                                break
+                        
+                        consecutive_empty_polls = 0  # Reset counter after coordinator check
+                    continue
+                
+                # Reset empty poll counter on successful get
+                consecutive_empty_polls = 0
+                
+                # CRITICAL: Process batch WITHOUT synchronization to maintain double buffering
+                if processed_count > 0:
+                    # Swap buffers but DO NOT sync - this is key to maintaining overlap
+                    self.pipeline.swap()
+                
+                # Extract data from PipelineInput
+                if hasattr(batch_data, 'get_torch_tensor'):
+                    # PipelineInput object - get as individual tensors
+                    batch_tensor = batch_data.get_torch_tensor(device='cpu')
+                    # Convert to list of individual tensors for pipeline compatibility
+                    cpu_tensors = [batch_tensor[i] for i in range(batch_tensor.shape[0])]
+                else:
+                    # Fallback for list of ObjectRefs
+                    cpu_tensors = ray.get(batch_data)
+                
+                actual_batch_size = len(cpu_tensors)
+                
+                # Process through pipeline - this starts async H2D/Compute/D2H
+                with nvtx.range(f"stream_process_batch_{processed_count}"):
+                    self.pipeline.process_batch(
+                        cpu_batch=cpu_tensors,
+                        batch_idx=processed_count,
+                        current_batch_size=actual_batch_size,
+                        nvtx_prefix=f"stream_actor_{self.gpu_id}"
+                    )
+                
+                # Push previous results to output queue if available and queue provided
+                if q2_manager is not None and last_output_data is not None:
+                    # Get results from the buffer that just finished (previous iteration)
+                    prev_buffer = 'B' if self.pipeline.current == 'A' else 'A'
+                    output_tensor = self.pipeline.cpu_output_buffers[prev_buffer][:last_output_data['batch_size']].clone()
+                    
+                    # Create output using same metadata as input
+                    if hasattr(last_output_data['input'], 'metadata'):
+                        from ..config.data_structures import PipelineOutput
+                        output_batch = PipelineOutput.from_input_and_predictions(
+                            pipeline_input=last_output_data['input'],
+                            predictions=output_tensor,
+                            start_time=last_output_data['start_time']
+                        )
+                        q2_manager.put(output_batch)
+                
+                # Store current batch info for next iteration's output
+                last_output_data = {
+                    'input': batch_data if hasattr(batch_data, 'metadata') else None,
+                    'batch_size': actual_batch_size,
+                    'start_time': time.time()
+                }
+                
+                processed_count += 1
+                
+                # Update statistics
+                self.stats['batches_processed'] += 1
+                self.stats['samples_processed'] += actual_batch_size
+                
+                # Periodic logging
+                if processed_count % 50 == 0:
+                    elapsed = time.time() - start_time
+                    rate = self.stats['samples_processed'] / elapsed if elapsed > 0 else 0
+                    logging.info(f"Actor {self.gpu_id}: Processed {processed_count} batches, {rate:.1f} samples/s")
+                
+                # OPTIONAL: Periodic sync for memory management (NOT per batch!)
+                # This is optional and should be infrequent to maintain performance
+                if memory_sync_interval > 0 and processed_count % memory_sync_interval == 0:
+                    logging.debug(f"Actor {self.gpu_id}: Periodic memory sync at batch {processed_count}")
+                    self.pipeline.wait_for_completion()
+            
+            # FINAL synchronization - wait for all pending operations to complete
+            if processed_count > 0:
+                with nvtx.range("final_streaming_sync"):
+                    self.pipeline.wait_for_completion()
+                    
+                # Handle final output batch if needed
+                if q2_manager is not None and last_output_data is not None:
+                    current_buffer_output = self.pipeline.cpu_output_buffers[self.pipeline.current][:last_output_data['batch_size']].clone()
+                    if hasattr(last_output_data['input'], 'metadata'):
+                        from ..config.data_structures import PipelineOutput
+                        final_output = PipelineOutput.from_input_and_predictions(
+                            pipeline_input=last_output_data['input'],
+                            predictions=current_buffer_output,
+                            start_time=last_output_data['start_time']
+                        )
+                        q2_manager.put(final_output)
+            
+            # Register with coordinator that this actor is done
+            if coordinator is not None:
+                actor_id = f"actor_{self.gpu_id}"
+                ray.get(coordinator.register_actor_finished.remote(actor_id))
+            
+            total_time = time.time() - start_time
+            
+            result = {
+                'actor_id': self.gpu_id,
+                'batches_processed': processed_count,
+                'total_samples': self.stats['samples_processed'],
+                'processing_time': total_time,
+                'average_throughput': self.stats['samples_processed'] / total_time if total_time > 0 else 0,
+                'success': True
+            }
+            
+            logging.info(
+                f"Actor {self.gpu_id}: Streaming completed - "
+                f"{processed_count} batches, {self.stats['samples_processed']} samples, "
+                f"{result['average_throughput']:.1f} samples/s"
+            )
+            
+            return result
+
 
 # Create Ray actor classes from the base
 @ray.remote(num_gpus=1)

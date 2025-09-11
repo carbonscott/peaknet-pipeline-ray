@@ -591,3 +591,311 @@ class PeakNetPipeline:
 
         if not self.config.output.quiet:
             print(f"\n💾 Results saved to: {results_file}")
+
+    def run_streaming_pipeline(
+        self,
+        total_samples: Optional[int] = None,
+        enable_output_queue: bool = False
+    ) -> PipelineResults:
+        """
+        Run the streaming pipeline with continuous data processing.
+        
+        This method launches producers that generate data continuously,
+        pipeline actors that process data as it arrives (without accumulation),
+        and manages coordination for clean termination.
+        
+        Args:
+            total_samples: Override total samples to process (optional)
+            enable_output_queue: Enable Q2 output queue for downstream processing
+            
+        Returns:
+            PipelineResults containing success status and performance metrics
+        """
+        # Override total_samples if provided
+        if total_samples is not None:
+            self.config.runtime.total_samples = total_samples
+
+        try:
+            # Validate configuration
+            self._validate_config()
+
+            # Print banner
+            if not self.config.output.quiet:
+                self._print_streaming_banner()
+
+            # Step 1: GPU Environment Setup
+            healthy_gpus = self._setup_gpu_environment()
+
+            # Step 2: Ray Cluster Setup
+            self._setup_ray_cluster()
+
+            # Step 3: Create GPU Actors
+            actors = self._create_gpu_actors(healthy_gpus)
+
+            # Step 4: Run Streaming Pipeline
+            performance = self._run_streaming_workflow(actors, enable_output_queue)
+
+            # Step 5: Results
+            if not self.config.output.quiet:
+                self._print_streaming_results(performance)
+
+            if self.config.output.output_dir:
+                self._save_results(performance)
+
+            return PipelineResults(success=performance['success'], performance=performance)
+
+        except KeyboardInterrupt:
+            error = "Streaming pipeline interrupted by user"
+            if not self.config.output.quiet:
+                print(f"\n⚠️  {error}")
+            return PipelineResults(success=False, performance={}, error=error)
+
+        except Exception as e:
+            error = f"Streaming pipeline failed: {e}"
+            if not self.config.output.quiet:
+                print(f"\n💥 {error}")
+                if self.config.output.verbose:
+                    import traceback
+                    traceback.print_exc()
+            return PipelineResults(success=False, performance={}, error=str(e))
+
+    def _print_streaming_banner(self) -> None:
+        """Print streaming pipeline banner."""
+        print("🌊 Ray Multi-GPU PeakNet STREAMING Pipeline")
+        print("=" * 55)
+        print("🚀 TRUE CONTINUOUS STREAMING - No batch accumulation!")
+        print("🔄 Preserves double buffering - No per-batch sync!")
+        print()
+
+        if self.config.output.verbose:
+            print(f"Configuration:")
+            print(f"  Model: PeakNet (weights: {self.config.model.weights_path is not None})")
+            print(f"  Data: {self.config.data.shape} tensor shape")
+            print(f"  Runtime: {self.config.runtime.batch_size} batch size, {self.config.runtime.num_producers} producers")
+            print(f"  System: min {self.config.system.min_gpus} GPUs required")
+            print()
+
+    def _run_streaming_workflow(
+        self, 
+        actors: List[Any], 
+        enable_output_queue: bool
+    ) -> Dict[str, Any]:
+        """Run the complete streaming workflow with producers and actors."""
+        from .utils.queue import ShardedQueueManager
+        from .core.coordinator import create_streaming_coordinator
+        from .core.streaming_producer import create_streaming_producers
+
+        if not self.config.output.quiet:
+            print("\n🌊 Starting Streaming Workflow")
+
+        # Calculate production parameters
+        runtime = self.config.runtime
+        data = self.config.data
+
+        if runtime.total_samples is not None:
+            total_batches_needed = (runtime.total_samples + runtime.batch_size - 1) // runtime.batch_size
+            batches_per_producer = max(1, total_batches_needed // runtime.num_producers)
+            if total_batches_needed > runtime.num_producers * batches_per_producer:
+                batches_per_producer += 1
+        else:
+            batches_per_producer = runtime.batches_per_producer
+
+        total_expected_batches = runtime.num_producers * batches_per_producer
+        total_expected_samples = total_expected_batches * runtime.batch_size
+
+        if not self.config.output.quiet:
+            print(f"   Producers: {runtime.num_producers}")
+            print(f"   Actors: {len(actors)}")  
+            print(f"   Batches per producer: {batches_per_producer}")
+            print(f"   Expected total: {total_expected_batches} batches, {total_expected_samples} samples")
+            print(f"   Input shape: {data.shape}")
+            print(f"   Inter-batch delay: {runtime.inter_batch_delay}s")
+
+        # Step 1: Create Coordinator
+        if not self.config.output.quiet:
+            print("\n📡 Step 1: Creating Streaming Coordinator")
+        
+        coordinator = create_streaming_coordinator(
+            expected_producers=runtime.num_producers,
+            expected_actors=len(actors)
+        )
+
+        # Step 2: Create Queues
+        if not self.config.output.quiet:
+            print("📦 Step 2: Creating Queue Infrastructure")
+        
+        # Input queue (Q1) - producers -> actors
+        num_shards = min(4, max(2, len(actors)))  # Scale with actor count
+        maxsize_per_shard = max(25, runtime.batch_size * 2)  # Accommodate batch sizes
+        
+        q1_manager = ShardedQueueManager(
+            "streaming_input_queue", 
+            num_shards=num_shards, 
+            maxsize_per_shard=maxsize_per_shard
+        )
+
+        q2_manager = None
+        if enable_output_queue:
+            q2_manager = ShardedQueueManager(
+                "streaming_output_queue",
+                num_shards=num_shards,
+                maxsize_per_shard=maxsize_per_shard
+            )
+
+        if not self.config.output.quiet:
+            print(f"   Q1 (input): {num_shards} shards, {maxsize_per_shard} items/shard")
+            if enable_output_queue:
+                print(f"   Q2 (output): {num_shards} shards, {maxsize_per_shard} items/shard")
+
+        # Step 3: Launch Streaming Producers
+        if not self.config.output.quiet:
+            print("🏭 Step 3: Launching Streaming Producers")
+
+        producers = create_streaming_producers(
+            num_producers=runtime.num_producers,
+            batch_size=runtime.batch_size,
+            tensor_shape=data.shape,
+            inter_batch_delay=runtime.inter_batch_delay,
+            deterministic=False
+        )
+
+        producer_tasks = []
+        for i, producer in enumerate(producers):
+            task = producer.stream_batches_to_queue.remote(
+                q1_manager, 
+                batches_per_producer, 
+                coordinator,
+                progress_interval=max(10, batches_per_producer // 10)
+            )
+            producer_tasks.append(task)
+
+        # Step 4: Launch Streaming Pipeline Actors  
+        if not self.config.output.quiet:
+            print("🎭 Step 4: Launching Streaming Pipeline Actors")
+
+        actor_tasks = []
+        for i, actor in enumerate(actors):
+            task = actor.process_from_queue.remote(
+                q1_manager,
+                q2_manager,
+                coordinator,
+                max_empty_polls=20,  # Check coordinator after 20 empty polls
+                poll_timeout=0.01,   # 10ms poll timeout
+                memory_sync_interval=200  # Sync every 200 batches for memory management
+            )
+            actor_tasks.append(task)
+
+        # Step 5: Monitor and Wait for Completion
+        if not self.config.output.quiet:
+            print("⏳ Step 5: Streaming Processing (Real-time)")
+            print("   📊 Producers generating data...")
+            print("   ⚡ Actors processing continuously...")
+            print("   🔄 Double buffering preserved - no per-batch sync!")
+
+        start_time = time.time()
+
+        # Wait for producers to complete
+        if not self.config.output.quiet:
+            print("\n   Waiting for producers to finish...")
+        
+        producer_results = ray.get(producer_tasks)
+        producer_time = time.time() - start_time
+
+        if not self.config.output.quiet:
+            total_produced_samples = sum(r['total_samples'] for r in producer_results)
+            avg_producer_rate = sum(r['effective_rate'] for r in producer_results) / len(producer_results)
+            print(f"   ✅ All producers finished in {producer_time:.2f}s")
+            print(f"   📊 Produced: {total_produced_samples} samples at avg {avg_producer_rate:.1f} samples/s")
+
+        # Wait for actors to complete
+        if not self.config.output.quiet:
+            print("   Waiting for actors to finish processing...")
+
+        actor_results = ray.get(actor_tasks)
+        total_time = time.time() - start_time
+
+        # Step 6: Calculate Performance Metrics
+        total_processed_samples = sum(r['total_samples'] for r in actor_results)
+        total_processed_batches = sum(r['batches_processed'] for r in actor_results)
+        
+        # Per-actor stats
+        actor_stats = {}
+        for i, result in enumerate(actor_results):
+            actor_stats[i] = {
+                'batches': result['batches_processed'],
+                'samples': result['total_samples'],
+                'throughput': result['average_throughput'],
+                'processing_time': result['processing_time']
+            }
+
+        return {
+            'success': True,
+            'streaming_mode': True,
+            'total_samples': total_processed_samples,
+            'total_batches': total_processed_batches,
+            'total_processing_time': total_time,
+            'producer_time': producer_time,
+            'overall_throughput': total_processed_samples / total_time if total_time > 0 else 0,
+            'producer_results': producer_results,
+            'actor_results': actor_results,
+            'actor_stats': actor_stats,
+            'expected_samples': total_expected_samples,
+            'sample_completion_rate': total_processed_samples / total_expected_samples if total_expected_samples > 0 else 0,
+            'queue_config': {
+                'q1_shards': num_shards,
+                'q1_maxsize_per_shard': maxsize_per_shard,
+                'output_queue_enabled': enable_output_queue
+            }
+        }
+
+    def _print_streaming_results(self, performance: Dict[str, Any]) -> None:
+        """Print streaming pipeline performance results."""
+        print("\n📈 Streaming Pipeline Results")
+        print("=" * 40)
+
+        if not performance['success']:
+            print(f"❌ Processing failed: {performance.get('error', 'Unknown error')}")
+            return
+
+        # Overall metrics
+        print(f"🌊 Streaming Performance:")
+        print(f"   Total samples processed: {performance['total_samples']:,}")
+        print(f"   Total batches processed: {performance['total_batches']:,}")
+        print(f"   Expected samples: {performance['expected_samples']:,}")
+        print(f"   Completion rate: {performance['sample_completion_rate']:.1%}")
+        print(f"   Total time: {performance['total_processing_time']:.2f}s")
+        print(f"   Overall throughput: {performance['overall_throughput']:.1f} samples/s")
+
+        # Producer performance
+        print(f"\n🏭 Producer Performance:")
+        for i, result in enumerate(performance['producer_results']):
+            print(f"   Producer {i}: {result['total_samples']:,} samples, "
+                  f"{result['effective_rate']:.1f} samples/s, "
+                  f"{result['backpressure_events']} backpressure events")
+
+        # Actor performance
+        print(f"\n🎭 Actor Performance (TRUE STREAMING - No per-batch sync!):")
+        for actor_id, stats in performance['actor_stats'].items():
+            print(f"   GPU Actor {actor_id}: {stats['batches']} batches, "
+                  f"{stats['samples']:,} samples, {stats['throughput']:.1f} samples/s")
+
+        # Queue configuration
+        queue_config = performance['queue_config']
+        print(f"\n📦 Queue Configuration:")
+        print(f"   Input queue: {queue_config['q1_shards']} shards × {queue_config['q1_maxsize_per_shard']} items")
+        print(f"   Output queue: {'enabled' if queue_config['output_queue_enabled'] else 'disabled'}")
+
+        # Profiling information
+        if self.config.profiling.enable_profiling:
+            import os
+            tmpdir = os.environ.get('TMPDIR', '/tmp')
+            print(f"\n📊 Profiling Information:")
+            print(f"   🔍 Check nsys profile for continuous overlapping operations")
+            print(f"   ✅ Should show NO cudaStreamSynchronize blocking in hot path")
+            print(f"   📁 Profile files: {tmpdir}/ray/session_latest/logs/nsight/")
+
+        if performance['success']:
+            print(f"\n🎉 Streaming Pipeline Completed Successfully!")
+            print(f"   🌊 TRUE CONTINUOUS PROCESSING: {performance['total_samples']:,} samples")
+            print(f"   ⚡ DOUBLE BUFFERING PRESERVED: No per-batch synchronization")
+            print(f"   📈 Throughput: {performance['overall_throughput']:.1f} samples/s")
