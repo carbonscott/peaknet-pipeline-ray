@@ -75,6 +75,16 @@ def create_parser() -> argparse.ArgumentParser:
         type=float,
         help='Delay between batches in seconds'
     )
+    runtime_group.add_argument(
+        '--queue-shards',
+        type=int,
+        help='Number of queue shards for parallel access'
+    )
+    runtime_group.add_argument(
+        '--queue-size-per-shard',
+        type=int,
+        help='Maximum items per queue shard'
+    )
 
     # Data configuration
     data_group = parser.add_argument_group('data', 'Data configuration options')
@@ -175,6 +185,10 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config.runtime.batches_per_producer = args.batches_per_producer
     if args.inter_batch_delay is not None:
         config.runtime.inter_batch_delay = args.inter_batch_delay
+    if args.queue_shards is not None:
+        config.runtime.queue_num_shards = args.queue_shards
+    if args.queue_size_per_shard is not None:
+        config.runtime.queue_maxsize_per_shard = args.queue_size_per_shard
 
     if args.shape is not None:
         config.data.shape = tuple(args.shape)

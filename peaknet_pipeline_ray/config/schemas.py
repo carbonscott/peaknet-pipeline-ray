@@ -23,6 +23,9 @@ class RuntimeConfig:
     num_producers: int = 4
     batches_per_producer: int = 5
     inter_batch_delay: float = 0.1
+    # Queue configuration
+    queue_num_shards: int = 4  # Number of queue shards for parallel access
+    queue_maxsize_per_shard: int = 100  # Maximum items per shard (total capacity = shards * maxsize)
 
 
 @dataclass

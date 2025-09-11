@@ -31,25 +31,7 @@ class StreamingStats:
     """Statistics tracked by the streaming producer."""
     batches_generated: int = 0
     total_samples: int = 0
-    generation_time: float = 0.0
-    queue_put_time: float = 0.0
     backpressure_events: int = 0
-    queue_full_time: float = 0.0
-    
-    @property
-    def generation_rate(self) -> float:
-        """Samples per second generation rate."""
-        if self.generation_time > 0:
-            return self.total_samples / self.generation_time
-        return 0.0
-    
-    @property
-    def effective_rate(self) -> float:
-        """Effective samples per second including queue delays."""
-        total_time = self.generation_time + self.queue_put_time + self.queue_full_time
-        if total_time > 0:
-            return self.total_samples / total_time
-        return 0.0
 
 
 @ray.remote
@@ -67,7 +49,6 @@ class StreamingDataProducer:
         batch_size: int = 16,
         tensor_shape: Tuple[int, int, int] = (1, 1920, 1920),
         inter_batch_delay: float = 0.0,
-        max_queue_retries: int = 50,
         deterministic: bool = False
     ):
         """Initialize the streaming data producer.
@@ -77,14 +58,12 @@ class StreamingDataProducer:
             batch_size: Number of samples per batch
             tensor_shape: Shape of each tensor (C, H, W)
             inter_batch_delay: Delay between batches in seconds
-            max_queue_retries: Maximum retries when queue is full
             deterministic: Use deterministic data generation
         """
         self.producer_id = producer_id
         self.batch_size = batch_size
         self.tensor_shape = tensor_shape
         self.inter_batch_delay = inter_batch_delay
-        self.max_queue_retries = max_queue_retries
         self.deterministic = deterministic
         
         # Statistics tracking
@@ -110,8 +89,6 @@ class StreamingDataProducer:
         Returns:
             PipelineInput with synthetic data and metadata
         """
-        gen_start = time.time()
-        
         # Generate synthetic image data
         if self.deterministic:
             # Deterministic data for testing
@@ -149,8 +126,6 @@ class StreamingDataProducer:
         
         batch_id = f"producer_{self.producer_id}_batch_{batch_idx}"
         
-        self.stats.generation_time += time.time() - gen_start
-        
         # Use ObjectRef mode for optimal performance
         return PipelineInput.from_numpy_array(
             numpy_array=batch_numpy,
@@ -187,15 +162,8 @@ class StreamingDataProducer:
             # Generate batch
             batch_data = self.generate_synthetic_batch(batch_idx)
             
-            # Push to queue with backpressure handling
-            success = self._push_with_backpressure(q1_manager, batch_data, batch_idx)
-            
-            if not success:
-                logging.error(
-                    f"Producer {self.producer_id}: Failed to push batch {batch_idx} "
-                    f"after {self.max_queue_retries} retries"
-                )
-                break
+            # Push to queue with backpressure handling (always succeeds eventually)
+            self._push_with_backpressure(q1_manager, batch_data, batch_idx)
             
             self.stats.batches_generated += 1
             self.stats.total_samples += self.batch_size
@@ -230,10 +198,7 @@ class StreamingDataProducer:
             'batches_generated': self.stats.batches_generated,
             'total_samples': self.stats.total_samples,
             'total_time': total_time,
-            'generation_rate': self.stats.generation_rate,
-            'effective_rate': self.stats.effective_rate,
             'backpressure_events': self.stats.backpressure_events,
-            'queue_full_time': self.stats.queue_full_time,
             'avg_batch_time': total_time / max(self.stats.batches_generated, 1)
         }
         
@@ -241,7 +206,7 @@ class StreamingDataProducer:
             f"Producer {self.producer_id} completed: "
             f"{final_stats['batches_generated']} batches, "
             f"{final_stats['total_samples']} samples, "
-            f"{final_stats['effective_rate']:.1f} samples/s effective rate"
+            f"{final_stats['backpressure_events']} backpressure events"
         )
         
         return final_stats
@@ -252,7 +217,7 @@ class StreamingDataProducer:
         batch_data: PipelineInput,
         batch_idx: int
     ) -> bool:
-        """Push batch to queue with exponential backoff on backpressure.
+        """Push batch to queue, waiting indefinitely for space.
         
         Args:
             q1_manager: Queue manager to push to
@@ -260,37 +225,29 @@ class StreamingDataProducer:
             batch_idx: Batch index for logging
             
         Returns:
-            True if successful, False if all retries exhausted
+            True when successful (always succeeds eventually)
         """
-        put_start = time.time()
-        retry_count = 0
         backoff_delay = 0.001  # Start with 1ms
         
-        while retry_count < self.max_queue_retries:
+        while True:  # Wait indefinitely - no retry limit!
             success = q1_manager.put(batch_data)
             
             if success:
-                self.stats.queue_put_time += time.time() - put_start
                 return True
             
-            # Backpressure event
+            # Queue full - backpressure event
             self.stats.backpressure_events += 1
-            retry_count += 1
             
-            # Exponential backoff (cap at 100ms)
+            # Exponential backoff with cap at 100ms
             time.sleep(min(backoff_delay, 0.1))
-            backoff_delay *= 1.5
+            backoff_delay = min(backoff_delay * 1.5, 0.1)
             
-            # Track time spent waiting for queue space
-            self.stats.queue_full_time += backoff_delay
-            
-            if retry_count % 10 == 0:
-                logging.warning(
-                    f"Producer {self.producer_id}: Batch {batch_idx} "
-                    f"queue full, retry {retry_count}/{self.max_queue_retries}"
+            # Log periodically to show we're waiting
+            if self.stats.backpressure_events % 100 == 0:
+                logging.debug(
+                    f"Producer {self.producer_id}: Waiting for queue space "
+                    f"(batch {batch_idx}, {self.stats.backpressure_events} backpressure events)"
                 )
-        
-        return False
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get current producer statistics.
@@ -302,10 +259,7 @@ class StreamingDataProducer:
             'producer_id': self.producer_id,
             'batches_generated': self.stats.batches_generated,
             'total_samples': self.stats.total_samples,
-            'generation_rate': self.stats.generation_rate,
-            'effective_rate': self.stats.effective_rate,
-            'backpressure_events': self.stats.backpressure_events,
-            'queue_full_time': self.stats.queue_full_time
+            'backpressure_events': self.stats.backpressure_events
         }
 
 

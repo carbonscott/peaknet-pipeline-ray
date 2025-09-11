@@ -135,7 +135,6 @@ class PipelineOutput:
     predictions_ref: Optional[ray.ObjectRef] = None # ObjectRef to numpy array (performance mode)  
     metadata: Dict[str, Any] = None                 # Exact pass-through from input
     batch_id: str = None                            # Same tracking identifier from input
-    processing_time: float = None                   # Time spent in pipeline processing (seconds)
 
     def __post_init__(self):
         """Validate the output data structure."""
@@ -151,19 +150,16 @@ class PipelineOutput:
             raise TypeError("metadata must be a dictionary")
         if not isinstance(self.batch_id, str):
             raise TypeError("batch_id must be a string")
-        if not isinstance(self.processing_time, (int, float)):
-            raise TypeError("processing_time must be a number")
 
     @classmethod
     def from_numpy_array(cls, numpy_predictions: np.ndarray, metadata: Dict[str, Any], 
-                        batch_id: str, processing_time: float) -> 'PipelineOutput':
+                        batch_id: str) -> 'PipelineOutput':
         """Create PipelineOutput with numpy array stored as ObjectRef for optimal performance.
         
         Args:
             numpy_predictions: Predictions as numpy array
             metadata: Pass-through metadata
             batch_id: Tracking identifier
-            processing_time: Processing time in seconds
             
         Returns:
             PipelineOutput with predictions_ref pointing to numpy array in Ray object store
@@ -172,8 +168,7 @@ class PipelineOutput:
         return cls(
             predictions_ref=predictions_ref,
             metadata=metadata,
-            batch_id=batch_id,
-            processing_time=processing_time
+            batch_id=batch_id
         )
 
     @classmethod
@@ -181,33 +176,29 @@ class PipelineOutput:
         cls, 
         pipeline_input: PipelineInput, 
         predictions: Union[torch.Tensor, np.ndarray],
-        start_time: float
+        start_time: float = None  # Kept for backward compatibility but not used
     ) -> 'PipelineOutput':
         """Create PipelineOutput from PipelineInput and model predictions.
 
         Args:
             pipeline_input: Original input data structure
             predictions: Output from PeakNet model (torch.Tensor or np.ndarray)
-            start_time: Time when processing started (from time.time())
+            start_time: Ignored (kept for backward compatibility)
 
         Returns:
             PipelineOutput with metadata preserved from input
         """
-        processing_time = time.time() - start_time
-        
         if isinstance(predictions, torch.Tensor):
             return cls(
                 predictions=predictions,
                 metadata=pipeline_input.metadata.copy(),  # Deep copy to prevent modification
-                batch_id=pipeline_input.batch_id,
-                processing_time=processing_time
+                batch_id=pipeline_input.batch_id
             )
         else:  # numpy array
             return cls.from_numpy_array(
                 numpy_predictions=predictions,
                 metadata=pipeline_input.metadata.copy(),
-                batch_id=pipeline_input.batch_id,
-                processing_time=processing_time
+                batch_id=pipeline_input.batch_id
             )
     
     def get_torch_tensor(self, device: str = "cpu") -> torch.Tensor:

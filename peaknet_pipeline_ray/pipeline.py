@@ -725,8 +725,8 @@ class PeakNetPipeline:
             print("📦 Step 2: Creating Queue Infrastructure")
         
         # Input queue (Q1) - producers -> actors
-        num_shards = min(4, max(2, len(actors)))  # Scale with actor count
-        maxsize_per_shard = max(25, runtime.batch_size * 2)  # Accommodate batch sizes
+        num_shards = runtime.queue_num_shards
+        maxsize_per_shard = runtime.queue_maxsize_per_shard
         
         q1_manager = ShardedQueueManager(
             "streaming_input_queue", 
@@ -870,7 +870,6 @@ class PeakNetPipeline:
         print(f"\n🏭 Producer Performance:")
         for i, result in enumerate(performance['producer_results']):
             print(f"   Producer {i}: {result['total_samples']:,} samples, "
-                  f"{result['effective_rate']:.1f} samples/s, "
                   f"{result['backpressure_events']} backpressure events")
 
         # Actor performance
