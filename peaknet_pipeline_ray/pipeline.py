@@ -803,9 +803,9 @@ class PeakNetPipeline:
 
         if not self.config.output.quiet:
             total_produced_samples = sum(r['total_samples'] for r in producer_results)
-            avg_producer_rate = sum(r['effective_rate'] for r in producer_results) / len(producer_results)
+            total_backpressure = sum(r['backpressure_events'] for r in producer_results)
             print(f"   ✅ All producers finished in {producer_time:.2f}s")
-            print(f"   📊 Produced: {total_produced_samples} samples at avg {avg_producer_rate:.1f} samples/s")
+            print(f"   📊 Produced: {total_produced_samples} samples, {total_backpressure} backpressure events")
 
         # Wait for actors to complete
         if not self.config.output.quiet:
