@@ -88,7 +88,12 @@ class PipelineConfig:
         # Extract each section, providing empty dict as default
         model_config = ModelConfig(**config_dict.get('model', {}))
         runtime_config = RuntimeConfig(**config_dict.get('runtime', {}))
-        data_config = DataConfig(**config_dict.get('data', {}))
+        
+        # Extract data config, filtering out deprecated fields
+        data_dict = config_dict.get('data', {})
+        data_dict.pop('input_channels', None)  # Remove deprecated field if present
+        data_config = DataConfig(**data_dict)
+        
         system_config = SystemConfig(**config_dict.get('system', {}))
         profiling_config = ProfilingConfig(**config_dict.get('profiling', {}))
         output_config = OutputConfig(**config_dict.get('output', {}))

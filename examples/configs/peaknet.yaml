@@ -35,8 +35,7 @@ runtime:
   inter_batch_delay: 0.01 # Moderate streaming rate
 
 data:
-  shape: [1, 1920, 1920]  # Full resolution as requested
-  input_channels: 1       # Single channel grayscale - typical for crystallography
+  shape: [1, 1920, 1920]  # Full resolution as requested (channels inferred from shape[0])
 
 system:
   min_gpus: 1             # Minimum GPUs required
