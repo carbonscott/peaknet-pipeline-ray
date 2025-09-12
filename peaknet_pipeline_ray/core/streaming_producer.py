@@ -37,12 +37,12 @@ class StreamingStats:
 @ray.remote
 class StreamingDataProducer:
     """Ray actor that generates streaming data for the pipeline.
-    
+
     This producer generates synthetic image data at a configurable rate and
     pushes it to the pipeline input queue. It handles backpressure gracefully
     and integrates with the coordinator for clean shutdown.
     """
-    
+
     def __init__(
         self,
         producer_id: int,
@@ -52,7 +52,7 @@ class StreamingDataProducer:
         deterministic: bool = False
     ):
         """Initialize the streaming data producer.
-        
+
         Args:
             producer_id: Unique identifier for this producer
             batch_size: Number of samples per batch
@@ -65,27 +65,27 @@ class StreamingDataProducer:
         self.tensor_shape = tensor_shape
         self.inter_batch_delay = inter_batch_delay
         self.deterministic = deterministic
-        
+
         # Statistics tracking
         self.stats = StreamingStats()
-        
+
         # Set random seed for deterministic generation
         if deterministic:
             np.random.seed(42 + producer_id)
             torch.manual_seed(42 + producer_id)
-        
+
         logging.info(
             f"StreamingDataProducer {producer_id} initialized: "
             f"batch_size={batch_size}, shape={tensor_shape}, "
             f"delay={inter_batch_delay}s, deterministic={deterministic}"
         )
-    
+
     def generate_synthetic_batch(self, batch_idx: int) -> PipelineInput:
         """Generate a synthetic batch with realistic metadata.
-        
+
         Args:
             batch_idx: Index of the batch for tracking
-            
+
         Returns:
             PipelineInput with synthetic data and metadata
         """
@@ -102,10 +102,10 @@ class StreamingDataProducer:
                 self.batch_size, *self.tensor_shape,
                 dtype=torch.float32
             )
-        
+
         # Convert to numpy for Ray ObjectRef storage
         batch_numpy = batch_data.numpy()
-        
+
         # Generate realistic metadata
         metadata = {
             'producer_id': self.producer_id,
@@ -123,16 +123,16 @@ class StreamingDataProducer:
                 'pressure': 1013.25 + np.random.randn() * 10.0
             }
         }
-        
+
         batch_id = f"producer_{self.producer_id}_batch_{batch_idx}"
-        
+
         # Use ObjectRef mode for optimal performance
         return PipelineInput.from_numpy_array(
             numpy_array=batch_numpy,
             metadata=metadata,
             batch_id=batch_id
         )
-    
+
     def stream_batches_to_queue(
         self,
         q1_manager: ShardedQueueManager,
@@ -141,33 +141,33 @@ class StreamingDataProducer:
         progress_interval: int = 50
     ) -> Dict[str, Any]:
         """Main streaming method - generates batches and pushes to queue.
-        
+
         Args:
             q1_manager: Input queue manager to push data to
             total_batches: Total number of batches to generate
             coordinator: Optional coordinator for registration
             progress_interval: Report progress every N batches
-            
+
         Returns:
             Dictionary with production statistics
         """
         start_time = time.time()
-        
+
         logging.info(
             f"Producer {self.producer_id}: Starting to stream {total_batches} batches "
             f"(batch_size={self.batch_size}, total_samples={total_batches * self.batch_size})"
         )
-        
+
         for batch_idx in range(total_batches):
             # Generate batch
             batch_data = self.generate_synthetic_batch(batch_idx)
-            
+
             # Push to queue with backpressure handling (always succeeds eventually)
             self._push_with_backpressure(q1_manager, batch_data, batch_idx)
-            
+
             self.stats.batches_generated += 1
             self.stats.total_samples += self.batch_size
-            
+
             # Progress reporting
             if progress_interval > 0 and (batch_idx + 1) % progress_interval == 0:
                 elapsed = time.time() - start_time
@@ -176,13 +176,13 @@ class StreamingDataProducer:
                     f"Producer {self.producer_id}: Generated {batch_idx + 1}/{total_batches} "
                     f"batches ({self.stats.total_samples} samples) at {rate:.1f} samples/s"
                 )
-            
+
             # Inter-batch delay
             if self.inter_batch_delay > 0:
                 time.sleep(self.inter_batch_delay)
-        
+
         total_time = time.time() - start_time
-        
+
         # Register completion with coordinator
         if coordinator is not None:
             producer_id = f"producer_{self.producer_id}"
@@ -191,7 +191,7 @@ class StreamingDataProducer:
                 logging.info(f"Producer {self.producer_id}: Registered completion with coordinator")
             except Exception as e:
                 logging.warning(f"Producer {self.producer_id}: Failed to register completion: {e}")
-        
+
         # Final statistics
         final_stats = {
             'producer_id': self.producer_id,
@@ -201,16 +201,16 @@ class StreamingDataProducer:
             'backpressure_events': self.stats.backpressure_events,
             'avg_batch_time': total_time / max(self.stats.batches_generated, 1)
         }
-        
+
         logging.info(
             f"Producer {self.producer_id} completed: "
             f"{final_stats['batches_generated']} batches, "
             f"{final_stats['total_samples']} samples, "
             f"{final_stats['backpressure_events']} backpressure events"
         )
-        
+
         return final_stats
-    
+
     def _push_with_backpressure(
         self,
         q1_manager: ShardedQueueManager,
@@ -218,40 +218,40 @@ class StreamingDataProducer:
         batch_idx: int
     ) -> bool:
         """Push batch to queue, waiting indefinitely for space.
-        
+
         Args:
             q1_manager: Queue manager to push to
             batch_data: The batch data to push
             batch_idx: Batch index for logging
-            
+
         Returns:
             True when successful (always succeeds eventually)
         """
         backoff_delay = 0.001  # Start with 1ms
-        
+
         while True:  # Wait indefinitely - no retry limit!
             success = q1_manager.put(batch_data)
-            
+
             if success:
                 return True
-            
+
             # Queue full - backpressure event
             self.stats.backpressure_events += 1
-            
+
             # Exponential backoff with cap at 100ms
             time.sleep(min(backoff_delay, 0.1))
             backoff_delay = min(backoff_delay * 1.5, 0.1)
-            
+
             # Log periodically to show we're waiting
             if self.stats.backpressure_events % 100 == 0:
                 logging.debug(
                     f"Producer {self.producer_id}: Waiting for queue space "
                     f"(batch {batch_idx}, {self.stats.backpressure_events} backpressure events)"
                 )
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get current producer statistics.
-        
+
         Returns:
             Dictionary with current statistics
         """
@@ -271,14 +271,14 @@ def create_streaming_producers(
     deterministic: bool = False
 ) -> list:
     """Convenience function to create multiple streaming producers.
-    
+
     Args:
         num_producers: Number of producer actors to create
         batch_size: Batch size for each producer
         tensor_shape: Tensor shape for generated data
         inter_batch_delay: Delay between batches
         deterministic: Use deterministic generation
-        
+
     Returns:
         List of Ray actor handles
     """
@@ -292,7 +292,7 @@ def create_streaming_producers(
             deterministic=deterministic
         )
         producers.append(producer)
-    
+
     logging.info(f"Created {num_producers} streaming data producers")
     return producers
 
@@ -301,11 +301,11 @@ if __name__ == "__main__":
     # Simple test of the streaming producer
     if not ray.is_initialized():
         ray.init()
-    
+
     from ..utils.queue import ShardedQueueManager
-    
+
     print("Testing StreamingDataProducer...")
-    
+
     # Create queue and producer
     queue_manager = ShardedQueueManager("test_queue", num_shards=2, maxsize_per_shard=10)
     producer = StreamingDataProducer.remote(
@@ -314,13 +314,13 @@ if __name__ == "__main__":
         tensor_shape=(1, 64, 64),
         deterministic=True
     )
-    
+
     # Stream some data
     stats = ray.get(producer.stream_batches_to_queue.remote(
         queue_manager, total_batches=5, progress_interval=2
     ))
-    
+
     print(f"Producer stats: {stats}")
     print(f"Queue size after production: {queue_manager.size()}")
-    
+
     print("✅ StreamingDataProducer test passed!")

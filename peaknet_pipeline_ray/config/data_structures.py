@@ -14,7 +14,7 @@ class PipelineInput:
 
     This structure separates the image data that the PeakNet model processes
     from the metadata that needs to be passed through to downstream processing.
-    
+
     Supports two modes:
     1. Direct mode: image_data is a torch.Tensor (for backward compatibility)
     2. ObjectRef mode: image_data_ref is a Ray ObjectRef to numpy array (for performance)
@@ -30,10 +30,10 @@ class PipelineInput:
             raise ValueError("Either image_data or image_data_ref must be provided")
         if self.image_data is not None and self.image_data_ref is not None:
             raise ValueError("Only one of image_data or image_data_ref should be provided")
-        
+
         if self.image_data is not None and not isinstance(self.image_data, torch.Tensor):
             raise TypeError("image_data must be a torch.Tensor")
-        
+
         if not isinstance(self.metadata, dict):
             raise TypeError("metadata must be a dictionary")
         if not isinstance(self.batch_id, str):
@@ -42,18 +42,18 @@ class PipelineInput:
     @classmethod
     def from_numpy_array(cls, numpy_array: np.ndarray, metadata: Dict[str, Any], batch_id: str) -> 'PipelineInput':
         """Create PipelineInput with numpy array stored as ObjectRef for optimal performance.
-        
+
         IMPORTANT: Ray ObjectRef Preservation
         ====================================
         This method creates an ObjectRef that will be preserved when passed through
         Ray actors (like our queue system) because ObjectRefs inside custom objects
         are NOT auto-dereferenced by Ray. This gives us optimal memory efficiency.
-        
+
         Args:
             numpy_array: Image data as numpy array
             metadata: Pass-through metadata
             batch_id: Tracking identifier
-            
+
         Returns:
             PipelineInput with image_data_ref pointing to numpy array in Ray object store
         """
@@ -63,16 +63,16 @@ class PipelineInput:
             metadata=metadata,
             batch_id=batch_id
         )
-    
+
     @classmethod
     def from_torch_tensor(cls, tensor: torch.Tensor, metadata: Dict[str, Any], batch_id: str) -> 'PipelineInput':
         """Create PipelineInput with torch tensor (backward compatibility).
-        
+
         Args:
             tensor: Image data as torch tensor
             metadata: Pass-through metadata
             batch_id: Tracking identifier
-            
+
         Returns:
             PipelineInput with direct tensor storage
         """
@@ -81,13 +81,13 @@ class PipelineInput:
             metadata=metadata,
             batch_id=batch_id
         )
-    
+
     def get_torch_tensor(self, device: str = "cpu") -> torch.Tensor:
         """Get image data as torch tensor, regardless of storage mode.
-        
+
         Args:
             device: Target device ("cpu", "cuda:0", etc.)
-            
+
         Returns:
             Torch tensor on specified device
         """
@@ -104,10 +104,10 @@ class PipelineInput:
             if device != "cpu":
                 tensor = tensor.to(device)  # Copy to GPU only when needed
             return tensor
-    
+
     def get_numpy_array(self) -> np.ndarray:
         """Get image data as numpy array, regardless of storage mode.
-        
+
         Returns:
             Numpy array (zero-copy if stored as ObjectRef)
         """
@@ -126,7 +126,7 @@ class PipelineOutput:
     This structure contains the PeakNet model predictions alongside the
     exact metadata from the input, ensuring downstream processing has
     both the inference results and all necessary metadata.
-    
+
     Supports two modes like PipelineInput:
     1. Direct mode: predictions is a torch.Tensor (for backward compatibility)
     2. ObjectRef mode: predictions_ref is a Ray ObjectRef to numpy array (for performance)
@@ -142,10 +142,10 @@ class PipelineOutput:
             raise ValueError("Either predictions or predictions_ref must be provided")
         if self.predictions is not None and self.predictions_ref is not None:
             raise ValueError("Only one of predictions or predictions_ref should be provided")
-            
+
         if self.predictions is not None and not isinstance(self.predictions, torch.Tensor):
             raise TypeError("predictions must be a torch.Tensor")
-        
+
         if not isinstance(self.metadata, dict):
             raise TypeError("metadata must be a dictionary")
         if not isinstance(self.batch_id, str):
@@ -155,12 +155,12 @@ class PipelineOutput:
     def from_numpy_array(cls, numpy_predictions: np.ndarray, metadata: Dict[str, Any], 
                         batch_id: str) -> 'PipelineOutput':
         """Create PipelineOutput with numpy array stored as ObjectRef for optimal performance.
-        
+
         Args:
             numpy_predictions: Predictions as numpy array
             metadata: Pass-through metadata
             batch_id: Tracking identifier
-            
+
         Returns:
             PipelineOutput with predictions_ref pointing to numpy array in Ray object store
         """
@@ -200,13 +200,13 @@ class PipelineOutput:
                 metadata=pipeline_input.metadata.copy(),
                 batch_id=pipeline_input.batch_id
             )
-    
+
     def get_torch_tensor(self, device: str = "cpu") -> torch.Tensor:
         """Get predictions as torch tensor, regardless of storage mode.
-        
+
         Args:
             device: Target device ("cpu", "cuda:0", etc.)
-            
+
         Returns:
             Torch tensor on specified device
         """
@@ -223,10 +223,10 @@ class PipelineOutput:
             if device != "cpu":
                 tensor = tensor.to(device)  # Copy to GPU only when needed
             return tensor
-    
+
     def get_numpy_array(self) -> np.ndarray:
         """Get predictions as numpy array, regardless of storage mode.
-        
+
         Returns:
             Numpy array (zero-copy if stored as ObjectRef)
         """

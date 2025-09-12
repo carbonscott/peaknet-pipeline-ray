@@ -599,15 +599,15 @@ class PeakNetPipeline:
     ) -> PipelineResults:
         """
         Run the streaming pipeline with continuous data processing.
-        
+
         This method launches producers that generate data continuously,
         pipeline actors that process data as it arrives (without accumulation),
         and manages coordination for clean termination.
-        
+
         Args:
             total_samples: Override total samples to process (optional)
             enable_output_queue: Enable Q2 output queue for downstream processing
-            
+
         Returns:
             PipelineResults containing success status and performance metrics
         """
@@ -714,7 +714,7 @@ class PeakNetPipeline:
         # Step 1: Create Coordinator
         if not self.config.output.quiet:
             print("\n📡 Step 1: Creating Streaming Coordinator")
-        
+
         coordinator = create_streaming_coordinator(
             expected_producers=runtime.num_producers,
             expected_actors=len(actors)
@@ -723,11 +723,11 @@ class PeakNetPipeline:
         # Step 2: Create Queues
         if not self.config.output.quiet:
             print("📦 Step 2: Creating Queue Infrastructure")
-        
+
         # Input queue (Q1) - producers -> actors
         num_shards = runtime.queue_num_shards
         maxsize_per_shard = runtime.queue_maxsize_per_shard
-        
+
         q1_manager = ShardedQueueManager(
             "streaming_input_queue", 
             num_shards=num_shards, 
@@ -797,7 +797,7 @@ class PeakNetPipeline:
         # Wait for producers to complete
         if not self.config.output.quiet:
             print("\n   Waiting for producers to finish...")
-        
+
         producer_results = ray.get(producer_tasks)
         producer_time = time.time() - start_time
 
@@ -817,7 +817,7 @@ class PeakNetPipeline:
         # Step 6: Calculate Performance Metrics
         total_processed_samples = sum(r['total_samples'] for r in actor_results)
         total_processed_batches = sum(r['batches_processed'] for r in actor_results)
-        
+
         # Per-actor stats
         actor_stats = {}
         for i, result in enumerate(actor_results):
