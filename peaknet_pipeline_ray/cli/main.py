@@ -42,6 +42,17 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         help='Path to pretrained model weights file'
     )
+    model_group.add_argument(
+        '--compile-mode',
+        type=str,
+        choices=[None, 'default', 'reduce-overhead', 'max-autotune'],
+        help='PyTorch compilation mode (None = no compilation, default: None)'
+    )
+    model_group.add_argument(
+        '--warmup-samples',
+        type=int,
+        help='Number of warmup samples (0 = skip warmup, default: 500)'
+    )
 
     # Runtime configuration
     runtime_group = parser.add_argument_group('runtime', 'Pipeline runtime options')
@@ -94,11 +105,6 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         metavar=('C', 'H', 'W'),
         help='Input tensor shape as channels, height, width (e.g., --shape 1 512 512)'
-    )
-    data_group.add_argument(
-        '--input-channels',
-        type=int,
-        help='Number of input channels'
     )
 
     # System configuration
@@ -172,6 +178,10 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config.model.yaml_path = args.model_yaml_path
     if args.model_weights_path is not None:
         config.model.weights_path = args.model_weights_path
+    if args.compile_mode is not None:
+        config.model.compile_mode = args.compile_mode
+    if args.warmup_samples is not None:
+        config.model.warmup_samples = args.warmup_samples
 
     if args.max_actors is not None:
         config.runtime.max_actors = args.max_actors
@@ -192,8 +202,6 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
 
     if args.shape is not None:
         config.data.shape = tuple(args.shape)
-    if args.input_channels is not None:
-        config.data.input_channels = args.input_channels
 
     if args.min_gpus is not None:
         config.system.min_gpus = args.min_gpus

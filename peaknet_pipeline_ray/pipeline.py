@@ -293,8 +293,8 @@ class PeakNetPipeline:
                 # PeakNet configuration
                 weights_path=self.config.model.weights_path,
                 peaknet_config=self.config.model.peaknet_config,
-                compile_model=False,  # TODO: Add to config when needed
-                compile_mode="default",
+                compile_mode=self.config.model.compile_mode,
+                warmup_samples=self.config.model.warmup_samples,
                 deterministic=True,
                 pin_memory=self.config.system.pin_memory
             )
@@ -561,7 +561,7 @@ class PeakNetPipeline:
             },
             'data': {
                 'shape': list(self.config.data.shape),
-                'input_channels': self.config.data.input_channels
+                'input_channels': self.config.data.shape[0]  # Extract from shape
             },
             'system': {
                 'min_gpus': self.config.system.min_gpus,

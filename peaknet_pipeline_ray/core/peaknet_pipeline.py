@@ -115,7 +115,7 @@ def get_gpu_info(gpu_id):
         return {'error': str(e)}
 
 
-def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_model=False, compile_mode='default'):
+def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_mode=None):
     """
     Create PeakNet model for compute simulation, or None for no-op.
 
@@ -123,8 +123,7 @@ def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_model=Fal
         peaknet_config: PeakNet configuration dict with model parameters (None for no-op)
         weights_path: Path to model weights
         gpu_id: GPU device ID
-        compile_model: Whether to compile the model
-        compile_mode: Compilation mode
+        compile_mode: Compilation mode (None = no compilation)
 
     Returns:
         tuple: (model, input_shape, output_shape) or (None, None, None) for no-op
@@ -162,7 +161,7 @@ def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_model=Fal
         print(f"✓ PeakNet model verified on GPU {gpu_id}")
 
         # Add torch.compile if requested and available
-        if compile_model and check_torch_compile_available():
+        if compile_mode is not None and check_torch_compile_available():
             print(f"Compiling PeakNet model with mode={compile_mode}...")
             try:
                 # Use specified compilation mode
@@ -170,7 +169,7 @@ def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_model=Fal
                 print(f"Model compilation successful (mode={compile_mode})")
             except Exception as e:
                 print(f"Warning: Model compilation failed with mode={compile_mode} ({e}), using non-compiled model")
-        elif compile_model and not check_torch_compile_available():
+        elif compile_mode is not None and not check_torch_compile_available():
             print("Warning: torch.compile not available (requires PyTorch 2.0+), using non-compiled model")
 
         return peaknet_model, input_shape, output_shape
@@ -396,8 +395,7 @@ def run_pipeline_test(
     deterministic=False,
     pin_memory=True,
     sync_frequency=10,
-    compile_model=False,
-    compile_mode='default'
+    compile_mode=None
 ):
     """
     Run comprehensive pipeline performance test with double buffering
@@ -434,7 +432,7 @@ def run_pipeline_test(
     print(f"Pin Memory: {pin_memory}")
     print(f"Sync Frequency: {sync_frequency}")
     print(f"Deterministic: {deterministic}")
-    print(f"Compile Model: {compile_model} (mode: {compile_mode})")
+    print(f"Compile Mode: {compile_mode}")
     print("=" * 60)
 
     # Check PeakNet availability for non-no-op mode
@@ -451,7 +449,7 @@ def run_pipeline_test(
     torch.cuda.set_device(gpu_id)
 
     # Increase warmup for aggressive compilation modes
-    if compile_model and compile_mode in ['reduce-overhead', 'max-autotune']:
+    if compile_mode in ['reduce-overhead', 'max-autotune']:
         original_warmup = warmup_samples
         warmup_samples = max(warmup_samples, 1000)
         if warmup_samples > original_warmup:
@@ -474,7 +472,7 @@ def run_pipeline_test(
 
     # Create PeakNet model separately
     peaknet_model, input_shape, output_shape = create_peaknet_model(
-        peaknet_config, weights_path, gpu_id, compile_model, compile_mode
+        peaknet_config, weights_path, gpu_id, compile_mode
     )
 
     # Calculate input and output shapes
@@ -577,8 +575,7 @@ def main(cfg: DictConfig) -> None:
         deterministic=cfg.test.deterministic,
         pin_memory=cfg.performance.pin_memory,
         sync_frequency=cfg.test.sync_frequency,
-        compile_model=cfg.performance.compile_model,
-        compile_mode=cfg.performance.compile_mode
+        compile_mode=cfg.performance.compile_mode if hasattr(cfg.performance, 'compile_mode') else None
     )
 
 

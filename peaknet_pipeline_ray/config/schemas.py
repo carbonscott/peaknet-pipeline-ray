@@ -12,6 +12,8 @@ class ModelConfig:
     yaml_path: Optional[str] = None
     weights_path: Optional[str] = None
     peaknet_config: Optional[Dict[str, Any]] = None
+    compile_mode: Optional[str] = None  # None/"default"/"reduce-overhead"/"max-autotune"
+    warmup_samples: int = 500  # 0 = skip warmup
 
 
 @dataclass  
@@ -31,8 +33,7 @@ class RuntimeConfig:
 @dataclass
 class DataConfig:
     """Data configuration for model input."""
-    shape: Tuple[int, int, int] = (1, 512, 512)  # C, H, W for model
-    input_channels: int = 1
+    shape: Tuple[int, int, int] = (1, 512, 512)  # C, H, W for model (channels = shape[0])
 
 
 @dataclass
@@ -107,7 +108,9 @@ class PipelineConfig:
             'model': {
                 'yaml_path': self.model.yaml_path,
                 'weights_path': self.model.weights_path,
-                'peaknet_config': self.model.peaknet_config
+                'peaknet_config': self.model.peaknet_config,
+                'compile_mode': self.model.compile_mode,
+                'warmup_samples': self.model.warmup_samples
             },
             'runtime': {
                 'max_actors': self.runtime.max_actors,
@@ -118,8 +121,7 @@ class PipelineConfig:
                 'inter_batch_delay': self.runtime.inter_batch_delay
             },
             'data': {
-                'shape': list(self.data.shape),
-                'input_channels': self.data.input_channels
+                'shape': list(self.data.shape)
             },
             'system': {
                 'min_gpus': self.system.min_gpus,
