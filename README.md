@@ -16,6 +16,47 @@ python -m peaknet_pipeline_ray.cli.main --config examples/configs/peaknet.yaml -
 
 This will generate NSys profiling data in `$TMPDIR/ray/session_latest/logs/nsight/` showing actual PeakNet GPU kernel execution.
 
+## Model Optimization with PyTorch Compilation
+
+The pipeline supports PyTorch 2.0+ model compilation for improved performance:
+
+### Basic Usage
+```bash
+# Enable compilation with default mode
+python -m peaknet_pipeline_ray.cli.main --config examples/configs/peaknet.yaml --compile-mode default
+
+# Use high-performance compilation mode
+python -m peaknet_pipeline_ray.cli.main --config examples/configs/peaknet.yaml --compile-mode reduce-overhead
+
+# Maximum optimization (longer compile time)
+python -m peaknet_pipeline_ray.cli.main --config examples/configs/peaknet.yaml --compile-mode max-autotune
+```
+
+### Compilation Modes
+- `None` (default): No compilation, fastest startup
+- `default`: Standard compilation with balanced compile time and performance
+- `reduce-overhead`: Aggressive optimization, reduces Python overhead
+- `max-autotune`: Maximum optimization, longest compile time but best performance
+
+### Model Warmup
+Compiled models benefit from warmup to avoid recompilation overhead during inference:
+
+```bash
+# Default warmup (500 samples)
+python -m peaknet_pipeline_ray.cli.main --config examples/configs/peaknet.yaml --compile-mode default
+
+# Custom warmup samples
+python -m peaknet_pipeline_ray.cli.main --config examples/configs/peaknet.yaml --compile-mode default --warmup-samples 1000
+
+# Skip warmup
+python -m peaknet_pipeline_ray.cli.main --config examples/configs/peaknet.yaml --compile-mode default --warmup-samples 0
+```
+
+### Performance Recommendations
+- Use `reduce-overhead` mode for production workloads with consistent batch sizes
+- Allow sufficient warmup samples (500-1000) for stable compilation
+- Monitor first-batch latency vs steady-state performance
+
 ## What it does
 
 - Runs PeakNet models (ConvNextV2 + BiFPN) 
