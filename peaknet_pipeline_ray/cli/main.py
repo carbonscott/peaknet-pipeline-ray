@@ -107,6 +107,30 @@ def create_parser() -> argparse.ArgumentParser:
         help='Input tensor shape as channels, height, width (e.g., --shape 1 512 512)'
     )
 
+    # Data source configuration
+    data_source_group = parser.add_argument_group('data_source', 'Data source configuration options')
+    data_source_group.add_argument(
+        '--data-source',
+        type=str,
+        choices=['random', 'socket'],
+        help='Data source type: random (synthetic data) or socket (from LCLStreamer)'
+    )
+    data_source_group.add_argument(
+        '--socket-hostname',
+        type=str,
+        help='Socket hostname for data source (e.g., sdfada015)'
+    )
+    data_source_group.add_argument(
+        '--socket-port',
+        type=int,
+        help='Socket port for data source (default: 12321)'
+    )
+    data_source_group.add_argument(
+        '--socket-timeout',
+        type=float,
+        help='Socket receive timeout in seconds (default: 10.0)'
+    )
+
     # System configuration
     system_group = parser.add_argument_group('system', 'System configuration options')
     system_group.add_argument(
@@ -203,6 +227,16 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
     if args.shape is not None:
         config.data.shape = tuple(args.shape)
 
+    # Data source overrides
+    if hasattr(args, 'data_source') and args.data_source is not None:
+        config.data_source.source_type = args.data_source
+    if hasattr(args, 'socket_hostname') and args.socket_hostname is not None:
+        config.data_source.socket_hostname = args.socket_hostname
+    if hasattr(args, 'socket_port') and args.socket_port is not None:
+        config.data_source.socket_port = args.socket_port
+    if hasattr(args, 'socket_timeout') and args.socket_timeout is not None:
+        config.data_source.socket_timeout = args.socket_timeout
+
     if args.min_gpus is not None:
         config.system.min_gpus = args.min_gpus
     if args.skip_gpu_validation:
@@ -249,6 +283,9 @@ def main(argv: Optional[list] = None) -> int:
             print(f"  Batch size: {config.runtime.batch_size}")
             print(f"  Total samples: {config.runtime.total_samples}")
             print(f"  Data shape: {config.data.shape}")
+            print(f"  Data source: {config.data_source.source_type}")
+            if config.data_source.source_type == "socket":
+                print(f"  Socket: {config.data_source.socket_hostname}:{config.data_source.socket_port}")
             print(f"  Min GPUs: {config.system.min_gpus}")
             print(f"  Profiling: {config.profiling.enable_profiling}")
 

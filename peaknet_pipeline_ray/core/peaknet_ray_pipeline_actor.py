@@ -45,7 +45,8 @@ class PeakNetPipelineActorBase:
         compile_mode: Optional[str] = None,
         warmup_samples: int = 500,
         deterministic: bool = False,
-        gpu_id: int = None
+        gpu_id: int = None,
+        skip_initial_warmup: bool = False
     ):
         """
         Initialize the pipeline actor.
@@ -60,6 +61,7 @@ class PeakNetPipelineActorBase:
             warmup_samples: Number of warmup samples (0 = skip warmup)
             deterministic: Use deterministic operations
             gpu_id: Explicit GPU ID to use (None for Ray auto-assignment)
+            skip_initial_warmup: Skip warmup during initialization (for post-warmup scenarios)
         """
         logging.info("=== Initializing PeakNetPipelineActor ===")
 
@@ -112,6 +114,8 @@ class PeakNetPipelineActorBase:
         self.batch_size = batch_size
         self.peaknet_config = peaknet_config
         self.weights_path = weights_path
+        self.warmup_completed = False
+        self.configured_warmup_samples = warmup_samples
         self.pin_memory = pin_memory
         self.deterministic = deterministic
 
@@ -180,10 +184,13 @@ class PeakNetPipelineActorBase:
             }
         }
 
-        # Model warmup if requested
-        if warmup_samples > 0 and self.peaknet_model is not None:
+        # Model warmup if requested and not skipped
+        if warmup_samples > 0 and self.peaknet_model is not None and not skip_initial_warmup:
             logging.info(f"Running model warmup with {warmup_samples} samples...")
             self._run_warmup(warmup_samples, input_shape)
+            self.warmup_completed = True
+        elif skip_initial_warmup:
+            logging.info(f"Skipping initial warmup - will warmup later with actual data shape")
 
         logging.info(f"✅ PeakNetPipelineActor initialized successfully on GPU {self.gpu_id}")
         logging.info(f"Model: peaknet_config={peaknet_config is not None}, compile_mode={compile_mode}, warmup_samples={warmup_samples}")
@@ -557,6 +564,45 @@ class PeakNetPipelineActorBase:
             
         except Exception as e:
             logging.warning(f"Warmup failed: {e}, continuing without warmup")
+
+    def trigger_post_warmup(self, detected_shape: Tuple[int, int, int]) -> Dict[str, Any]:
+        """Trigger warmup after shape detection from real data.
+
+        Args:
+            detected_shape: Shape detected from first real data packet (C, H, W)
+
+        Returns:
+            Status dictionary indicating success/failure
+        """
+        if self.warmup_completed:
+            return {'success': True, 'message': 'Warmup already completed'}
+
+        if self.configured_warmup_samples <= 0:
+            return {'success': True, 'message': 'Warmup disabled by configuration'}
+
+        if self.peaknet_model is None:
+            return {'success': True, 'message': 'No model to warmup'}
+
+        try:
+            logging.info(f"Starting post-warmup with detected shape: {detected_shape}")
+
+            # Update the input shape to match detected shape
+            self.input_shape = detected_shape
+
+            # Update pipeline configuration with new shape
+            if hasattr(self, 'pipeline'):
+                self.pipeline.update_input_shape(detected_shape)
+
+            # Run warmup with detected shape
+            self._run_warmup(self.configured_warmup_samples, detected_shape)
+            self.warmup_completed = True
+
+            logging.info(f"✅ Post-warmup completed successfully with shape {detected_shape}")
+            return {'success': True, 'message': f'Post-warmup completed with shape {detected_shape}'}
+
+        except Exception as e:
+            logging.error(f"❌ Post-warmup failed: {e}")
+            return {'success': False, 'error': str(e)}
 
 
 # Create Ray actor classes from the base

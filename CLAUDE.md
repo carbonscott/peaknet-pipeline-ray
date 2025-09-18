@@ -27,6 +27,10 @@ the entire pipeline consists of 5 stages:
 NOTE: Stage 1, 2, and 3 are concepts in the PeakNet pipeline only.  They are
 only components within the process `Q1->P->Q2`.
 
+### Current Status (Please read it to understand the current status)
+
+- **STATUS.md**
+
 ### Past works
 
 - **peaknet-ray**

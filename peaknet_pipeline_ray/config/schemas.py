@@ -37,6 +37,38 @@ class DataConfig:
 
 
 @dataclass
+class DataSourceConfig:
+    """Configuration for data source (random or socket)."""
+    source_type: str = "random"  # "random" or "socket"
+
+    # Socket configuration
+    socket_hostname: str = "localhost"
+    socket_port: int = 12321
+    socket_timeout: float = 10.0
+    socket_retry_attempts: int = 3
+
+    # Optional shape for socket data source (determines warmup timing)
+    # If provided: pre-warmup with this shape before data arrives
+    # If None: post-warmup after first data packet determines shape
+    shape: Optional[Tuple[int, int, int]] = None  # C, H, W
+
+    # HDF5 field mapping (matches LCLStreamer format)
+    fields: Dict[str, str] = field(default_factory=lambda: {
+        "detector_data": "/data/data",
+        "timestamp": "/data/timestamp",
+        "photon_wavelength": "/data/wavelength",
+        "random": "/data/random"
+    })
+
+    # Batch assembly configuration
+    batch_assembly: bool = True
+    batch_timeout: float = 1.0  # Max wait time for batch completion
+
+    # Required fields for validation
+    required_fields: list = field(default_factory=lambda: ["detector_data"])
+
+
+@dataclass
 class SystemConfig:
     """System configuration for hardware and resources."""
     min_gpus: int = 1
@@ -64,8 +96,9 @@ class OutputConfig:
 class PipelineConfig:
     """Main pipeline configuration container."""
     model: ModelConfig = field(default_factory=ModelConfig)
-    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)  
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     data: DataConfig = field(default_factory=DataConfig)
+    data_source: DataSourceConfig = field(default_factory=DataSourceConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
     profiling: ProfilingConfig = field(default_factory=ProfilingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -88,12 +121,17 @@ class PipelineConfig:
         # Extract each section, providing empty dict as default
         model_config = ModelConfig(**config_dict.get('model', {}))
         runtime_config = RuntimeConfig(**config_dict.get('runtime', {}))
-        
+
         # Extract data config, filtering out deprecated fields
         data_dict = config_dict.get('data', {})
         data_dict.pop('input_channels', None)  # Remove deprecated field if present
         data_config = DataConfig(**data_dict)
-        
+
+        # Extract data source config and handle shape field conversion
+        data_source_dict = config_dict.get('data_source', {})
+        if 'shape' in data_source_dict and data_source_dict['shape'] is not None:
+            data_source_dict['shape'] = tuple(data_source_dict['shape'])
+        data_source_config = DataSourceConfig(**data_source_dict)
         system_config = SystemConfig(**config_dict.get('system', {}))
         profiling_config = ProfilingConfig(**config_dict.get('profiling', {}))
         output_config = OutputConfig(**config_dict.get('output', {}))
@@ -102,6 +140,7 @@ class PipelineConfig:
             model=model_config,
             runtime=runtime_config,
             data=data_config,
+            data_source=data_source_config,
             system=system_config,
             profiling=profiling_config,
             output=output_config
@@ -127,6 +166,18 @@ class PipelineConfig:
             },
             'data': {
                 'shape': list(self.data.shape)
+            },
+            'data_source': {
+                'source_type': self.data_source.source_type,
+                'socket_hostname': self.data_source.socket_hostname,
+                'socket_port': self.data_source.socket_port,
+                'socket_timeout': self.data_source.socket_timeout,
+                'socket_retry_attempts': self.data_source.socket_retry_attempts,
+                'shape': list(self.data_source.shape) if self.data_source.shape else None,
+                'fields': self.data_source.fields,
+                'batch_assembly': self.data_source.batch_assembly,
+                'batch_timeout': self.data_source.batch_timeout,
+                'required_fields': self.data_source.required_fields
             },
             'system': {
                 'min_gpus': self.system.min_gpus,

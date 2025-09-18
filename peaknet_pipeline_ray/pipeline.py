@@ -283,12 +283,32 @@ class PeakNetPipeline:
                 print("   📊 NSys profiling enabled - profile files will be generated per actor")
 
         try:
+            # Determine warmup strategy based on data source configuration
+            skip_initial_warmup = False
+            input_shape = self.config.data.shape
+
+            if self.config.data_source.source_type == "socket":
+                if self.config.data_source.shape is None:
+                    # Post-warmup: skip initial warmup, use socket data to determine shape
+                    skip_initial_warmup = True
+                    if not self.config.output.quiet:
+                        print("   🔄 Post-warmup mode: will warmup after shape detection from socket data")
+                else:
+                    # Pre-warmup: use configured shape for immediate warmup
+                    input_shape = self.config.data_source.shape
+                    if not self.config.output.quiet:
+                        print(f"   ⚡ Pre-warmup mode: using configured socket shape {input_shape}")
+            else:
+                # Random source: always use data.shape for pre-warmup
+                if not self.config.output.quiet:
+                    print(f"   ⚡ Pre-warmup mode: using random data shape {input_shape}")
+
             actors = create_pipeline_actors(
                 num_actors=actual_num_actors,
                 enable_profiling=enable_profiling,
                 validate_gpus=False,  # Already validated at system level
                 # Pipeline configuration
-                input_shape=self.config.data.shape,
+                input_shape=input_shape,
                 batch_size=self.config.runtime.batch_size,
                 # PeakNet configuration
                 weights_path=self.config.model.weights_path,
@@ -296,7 +316,8 @@ class PeakNetPipeline:
                 compile_mode=self.config.model.compile_mode,
                 warmup_samples=self.config.model.warmup_samples,
                 deterministic=True,
-                pin_memory=self.config.system.pin_memory
+                pin_memory=self.config.system.pin_memory,
+                skip_initial_warmup=skip_initial_warmup
             )
 
             if not self.config.output.quiet:
@@ -749,15 +770,9 @@ class PeakNetPipeline:
 
         # Step 3: Launch Streaming Producers
         if not self.config.output.quiet:
-            print("🏭 Step 3: Launching Streaming Producers")
+            print(f"🏭 Step 3: Launching Streaming Producers ({self.config.data_source.source_type})")
 
-        producers = create_streaming_producers(
-            num_producers=runtime.num_producers,
-            batch_size=runtime.batch_size,
-            tensor_shape=data.shape,
-            inter_batch_delay=runtime.inter_batch_delay,
-            deterministic=False
-        )
+        producers = self._create_data_producers(runtime, data)
 
         producer_tasks = []
         for i, producer in enumerate(producers):
@@ -769,9 +784,41 @@ class PeakNetPipeline:
             )
             producer_tasks.append(task)
 
-        # Step 4: Launch Streaming Pipeline Actors  
+        # Step 4: Handle Post-Warmup Coordination if needed
+        if (self.config.data_source.source_type == "socket" and
+            self.config.data_source.shape is None):
+            if not self.config.output.quiet:
+                print("🔄 Step 4a: Waiting for shape detection from socket producer...")
+
+            # Wait for first producer to detect shape (they should all detect the same shape)
+            # We only need to wait for one producer to detect shape
+            first_producer_result = ray.get(producer_tasks[0])
+
+            if first_producer_result.get('detected_shape'):
+                detected_shape = first_producer_result['detected_shape']
+                if not self.config.output.quiet:
+                    print(f"   ✅ Shape detected: {detected_shape}")
+                    print(f"   🔥 Triggering post-warmup on all {len(actors)} actors...")
+
+                # Trigger post-warmup on all actors
+                warmup_futures = []
+                for i, actor in enumerate(actors):
+                    future = actor.trigger_post_warmup.remote(detected_shape)
+                    warmup_futures.append(future)
+
+                # Wait for all warmups to complete
+                warmup_results = ray.get(warmup_futures)
+                successful_warmups = sum(1 for r in warmup_results if r.get('success', False))
+
+                if not self.config.output.quiet:
+                    print(f"   ✅ Post-warmup completed on {successful_warmups}/{len(actors)} actors")
+            else:
+                if not self.config.output.quiet:
+                    print("   ⚠️  No shape detected, proceeding without post-warmup")
+
+        # Step 4b: Launch Streaming Pipeline Actors
         if not self.config.output.quiet:
-            print("🎭 Step 4: Launching Streaming Pipeline Actors")
+            print("🎭 Step 4b: Launching Streaming Pipeline Actors")
 
         actor_tasks = []
         for i, actor in enumerate(actors):
@@ -794,11 +841,29 @@ class PeakNetPipeline:
 
         start_time = time.time()
 
-        # Wait for producers to complete
+        # Wait for producers to complete (some may already be done if post-warmup happened)
         if not self.config.output.quiet:
             print("\n   Waiting for producers to finish...")
 
-        producer_results = ray.get(producer_tasks)
+        # Get results from all producers (some may already be completed)
+        remaining_tasks = []
+        completed_results = []
+
+        for i, task in enumerate(producer_tasks):
+            try:
+                # Check if already completed (from post-warmup wait)
+                result = ray.get(task, timeout=0.001)
+                completed_results.append(result)
+            except:
+                # Still running, add to remaining tasks
+                remaining_tasks.append(task)
+
+        # Wait for any remaining producer tasks
+        if remaining_tasks:
+            remaining_results = ray.get(remaining_tasks)
+            producer_results = completed_results + remaining_results
+        else:
+            producer_results = completed_results
         producer_time = time.time() - start_time
 
         if not self.config.output.quiet:
@@ -847,6 +912,45 @@ class PeakNetPipeline:
                 'output_queue_enabled': enable_output_queue
             }
         }
+
+    def _create_data_producers(self, runtime, data):
+        """Create data producers based on configuration.
+
+        Args:
+            runtime: Runtime configuration
+            data: Data configuration
+
+        Returns:
+            List of producer actors
+        """
+        if self.config.data_source.source_type == "socket":
+            # Create socket HDF5 producers
+            from .core.socket_hdf5_producer import create_socket_hdf5_producers
+
+            if not self.config.output.quiet:
+                print(f"   Socket: {self.config.data_source.socket_hostname}:{self.config.data_source.socket_port}")
+                print(f"   HDF5 fields: {list(self.config.data_source.fields.keys())}")
+
+            return create_socket_hdf5_producers(
+                num_producers=runtime.num_producers,
+                config=self.config.data_source,
+                batch_size=runtime.batch_size,
+                deterministic=False
+            )
+        else:
+            # Create random data producers (default/backward compatibility)
+            from .core.streaming_producer import create_streaming_producers
+
+            if not self.config.output.quiet:
+                print(f"   Random data: {data.shape}")
+
+            return create_streaming_producers(
+                num_producers=runtime.num_producers,
+                batch_size=runtime.batch_size,
+                tensor_shape=data.shape,
+                inter_batch_delay=runtime.inter_batch_delay,
+                deterministic=False
+            )
 
     def _print_streaming_results(self, performance: Dict[str, Any]) -> None:
         """Print streaming pipeline performance results."""
