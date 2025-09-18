@@ -37,10 +37,46 @@ runtime:
 data:
   shape: [1, 1920, 1920]  # Full resolution as requested (channels inferred from shape[0])
 
+transforms:
+  # Shape conversion from socket/detector data to model input format
+  add_channel_dimension: true   # Convert (H, W) -> (C, H, W) or (B, H, W) -> (B, C, H, W)
+  num_channels: 1              # Number of channels to add (usually 1 for detector data)
+  channel_dim: 1               # Position to insert channel dimension (after batch)
+
+  # Padding to normalize size differences (e.g., 1691x1691 -> 1920x1920)
+  pad_to_target: true          # Pad to match model input size (from data.shape)
+  pad_style: center            # Padding style: 'center' or 'bottom-right'
+
+  # Note: Target size is automatically inferred from data.shape
+
+# Data source configuration - supports both random and socket data
+data_source:
+  source_type: random     # Use "random" for synthetic data, "socket" for LCLStreamer
+
+  # Socket connection settings (used when source_type: socket)
+  socket_hostname: localhost  # Change to actual hostname (e.g., sdfada015)
+  socket_port: 12321          # Default LCLStreamer port
+  socket_timeout: 300.0       # Socket receive timeout in seconds
+  socket_retry_attempts: 5    # Number of connection retry attempts
+
+  # HDF5 field mapping (must match LCLStreamer configuration)
+  fields:
+    detector_data: "/data/data"           # Main image data from detector
+    timestamp: "/data/timestamp"          # Event timestamp
+    photon_wavelength: "/data/wavelength" # Photon wavelength/energy
+    random: "/data/random"                # Random array (if included by LCLStreamer)
+
+  # Direct batch pass-through: trust pusher to provide appropriately sized batches
+  batch_assembly: false       # Disable artificial batch assembly - use pusher's batches directly
+  # batch_timeout: removed    # No timeout needed with direct pass-through
+
+  # Required fields for validation
+  required_fields: ["detector_data"]  # Fields that must be present in each HDF5 message
+
 system:
   min_gpus: 1             # Minimum GPUs required
   skip_gpu_validation: false
-  pin_memory: true        # Better GPU transfer performance 
+  pin_memory: true        # Better GPU transfer performance
   verify_actors: true     # Verify GPU health
 
 profiling:
@@ -51,3 +87,24 @@ output:
   output_dir: "./test_results"
   verbose: true           # Detailed output for analysis
   quiet: false
+
+# Usage Examples:
+#
+# 1. Random data (default):
+#    peaknet-pipeline --config examples/configs/peaknet.yaml
+#
+# 2. Socket data from LCLStreamer:
+#    peaknet-pipeline --config examples/configs/peaknet.yaml --data-source socket --socket-hostname sdfada015
+#
+# 3. Override settings via CLI:
+#    peaknet-pipeline --config examples/configs/peaknet.yaml --max-actors 4 --total-samples 1024 --verbose
+#
+# 4. Transform options (if needed):
+#    peaknet-pipeline --config examples/configs/peaknet.yaml --add-channel-dimension --pad-to-target
+#
+# Key Features:
+# - Complete transform configuration support (CLI + YAML)
+# - Direct batch pass-through eliminates timeout warnings
+# - Support for both random and socket data sources
+# - Variable batch sizes automatically handled
+# - Transforms: (1691,1691) → (1,1691,1691) → (1,1920,1920)

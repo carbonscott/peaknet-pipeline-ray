@@ -23,6 +23,14 @@ import psutil
 import sys
 import os
 
+# Import tensor transforms for preprocessing
+try:
+    sys.path.insert(0, '/sdf/home/c/cwang31/codes/peaknet')
+    from peaknet.tensor_transforms import AddChannelDimension, Pad, NoTransform
+except ImportError:
+    print("WARNING: Could not import tensor transforms. Transform functionality will be disabled.")
+    AddChannelDimension = NoTransform = Pad = None
+
 # Check for PeakNet availability
 try:
     from .peaknet_utils import (
@@ -187,13 +195,16 @@ class DoubleBufferedPipeline:
     Internal methods are private to encourage proper encapsulation.
     """
 
-    def __init__(self, model, batch_size, input_shape, output_shape, gpu_id, pin_memory=True):
+    def __init__(self, model, batch_size, input_shape, output_shape, gpu_id, pin_memory=True, transforms=None):
         self.model = model
         self.batch_size = batch_size
         self.input_shape = input_shape
         self.output_shape = output_shape
         self.gpu_id = gpu_id
         self.pin_memory = pin_memory
+
+        # Store transforms for preprocessing
+        self.transforms = transforms if transforms is not None else []
 
         # Check if model is None (no-op mode)
         self.is_noop = (self.model is None)
@@ -275,9 +286,21 @@ class DoubleBufferedPipeline:
                 if batch_idx > 0:
                     self.h2d_stream.wait_event(d2h_event)
 
-                # Direct copy - no preprocessing (user responsible for correct input shape)
-                for i in range(current_batch_size):
-                    gpu_buffer[i].copy_(cpu_batch[i], non_blocking=True)
+                # Apply transforms if configured, then copy to GPU
+                if self.transforms:
+                    # Stack individual tensors into batch tensor for transforms
+                    batch_tensor = torch.stack(cpu_batch[:current_batch_size])
+
+                    # Apply transforms in sequence
+                    for transform in self.transforms:
+                        batch_tensor = transform(batch_tensor)
+
+                    # Copy transformed batch to GPU buffer
+                    gpu_buffer[:current_batch_size].copy_(batch_tensor, non_blocking=True)
+                else:
+                    # Direct copy - no preprocessing (user responsible for correct input shape)
+                    for i in range(current_batch_size):
+                        gpu_buffer[i].copy_(cpu_batch[i], non_blocking=True)
 
                 # Record H2D completion event for this specific buffer
                 self.h2d_stream.record_event(h2d_event)

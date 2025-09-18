@@ -21,6 +21,15 @@ import os
 from .peaknet_pipeline import DoubleBufferedPipeline, create_peaknet_model, get_numa_info, get_gpu_info
 # GPU health validation now handled at system level before Ray initialization
 
+# Import tensor transforms for preprocessing
+try:
+    import sys
+    sys.path.insert(0, '/sdf/home/c/cwang31/codes/peaknet')
+    from peaknet.tensor_transforms import AddChannelDimension, Pad, NoTransform
+except ImportError:
+    logging.warning("Could not import tensor transforms. Transform functionality will be disabled.")
+    AddChannelDimension = NoTransform = Pad = None
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
@@ -46,7 +55,8 @@ class PeakNetPipelineActorBase:
         warmup_samples: int = 500,
         deterministic: bool = False,
         gpu_id: int = None,
-        skip_initial_warmup: bool = False
+        # Transform configuration
+        transform_config: dict = None,
     ):
         """
         Initialize the pipeline actor.
@@ -61,7 +71,6 @@ class PeakNetPipelineActorBase:
             warmup_samples: Number of warmup samples (0 = skip warmup)
             deterministic: Use deterministic operations
             gpu_id: Explicit GPU ID to use (None for Ray auto-assignment)
-            skip_initial_warmup: Skip warmup during initialization (for post-warmup scenarios)
         """
         logging.info("=== Initializing PeakNetPipelineActor ===")
 
@@ -157,6 +166,9 @@ class PeakNetPipelineActorBase:
             self.output_shape = input_shape
             logging.info(f"No-op mode: input_shape={self.input_shape}, output_shape={self.output_shape}")
 
+        # Create transform chain based on configuration
+        transforms = self._create_transform_chain(transform_config, self.input_shape)
+
         # Create double buffered pipeline - use the same GPU device as assigned to this actor
         pipeline_gpu_id = self.gpu_id
 
@@ -166,7 +178,8 @@ class PeakNetPipelineActorBase:
             input_shape=self.input_shape,
             output_shape=self.output_shape,
             gpu_id=pipeline_gpu_id,
-            pin_memory=pin_memory
+            pin_memory=pin_memory,
+            transforms=transforms
         )
 
         # Initialize statistics
@@ -184,17 +197,54 @@ class PeakNetPipelineActorBase:
             }
         }
 
-        # Model warmup if requested and not skipped
-        if warmup_samples > 0 and self.peaknet_model is not None and not skip_initial_warmup:
+        # Model warmup if requested
+        if warmup_samples > 0 and self.peaknet_model is not None:
             logging.info(f"Running model warmup with {warmup_samples} samples...")
             self._run_warmup(warmup_samples, input_shape)
             self.warmup_completed = True
-        elif skip_initial_warmup:
-            logging.info(f"Skipping initial warmup - will warmup later with actual data shape")
 
         logging.info(f"✅ PeakNetPipelineActor initialized successfully on GPU {self.gpu_id}")
         logging.info(f"Model: peaknet_config={peaknet_config is not None}, compile_mode={compile_mode}, warmup_samples={warmup_samples}")
         logging.info(f"Shapes: input_shape={self.input_shape}, output_shape={self.output_shape}")
+
+    def _create_transform_chain(self, transform_config: dict, target_shape: Tuple[int, int, int]) -> List:
+        """
+        Create transform chain based on configuration.
+
+        Args:
+            transform_config: Dictionary with transform settings
+            target_shape: Target shape (C, H, W) for the model
+
+        Returns:
+            List of transform objects to apply in sequence
+        """
+        if transform_config is None or AddChannelDimension is None:
+            logging.info("No transforms configured or transforms not available")
+            return []
+
+        transforms = []
+
+        # Add channel dimension if needed
+        if transform_config.get('add_channel_dimension', False):
+            num_channels = transform_config.get('num_channels', 1)
+            channel_dim = transform_config.get('channel_dim', 1)
+            transforms.append(AddChannelDimension(channel_dim=channel_dim, num_channels=num_channels))
+            logging.info(f"Added AddChannelDimension transform: channels={num_channels}, dim={channel_dim}")
+
+        # Add padding if needed
+        if transform_config.get('pad_to_target', False) and target_shape:
+            # Use target H, W from input_shape
+            target_h, target_w = target_shape[-2:]  # Last two dimensions
+            pad_style = transform_config.get('pad_style', 'center')
+            transforms.append(Pad(target_h, target_w, pad_style=pad_style))
+            logging.info(f"Added Pad transform: target=({target_h}, {target_w}), style={pad_style}")
+
+        if transforms:
+            logging.info(f"Created transform chain with {len(transforms)} transforms")
+        else:
+            logging.info("No transforms added to chain")
+
+        return transforms
 
     def get_actor_info(self) -> Dict[str, Any]:
         """Return actor information and current statistics."""
@@ -565,44 +615,6 @@ class PeakNetPipelineActorBase:
         except Exception as e:
             logging.warning(f"Warmup failed: {e}, continuing without warmup")
 
-    def trigger_post_warmup(self, detected_shape: Tuple[int, int, int]) -> Dict[str, Any]:
-        """Trigger warmup after shape detection from real data.
-
-        Args:
-            detected_shape: Shape detected from first real data packet (C, H, W)
-
-        Returns:
-            Status dictionary indicating success/failure
-        """
-        if self.warmup_completed:
-            return {'success': True, 'message': 'Warmup already completed'}
-
-        if self.configured_warmup_samples <= 0:
-            return {'success': True, 'message': 'Warmup disabled by configuration'}
-
-        if self.peaknet_model is None:
-            return {'success': True, 'message': 'No model to warmup'}
-
-        try:
-            logging.info(f"Starting post-warmup with detected shape: {detected_shape}")
-
-            # Update the input shape to match detected shape
-            self.input_shape = detected_shape
-
-            # Update pipeline configuration with new shape
-            if hasattr(self, 'pipeline'):
-                self.pipeline.update_input_shape(detected_shape)
-
-            # Run warmup with detected shape
-            self._run_warmup(self.configured_warmup_samples, detected_shape)
-            self.warmup_completed = True
-
-            logging.info(f"✅ Post-warmup completed successfully with shape {detected_shape}")
-            return {'success': True, 'message': f'Post-warmup completed with shape {detected_shape}'}
-
-        except Exception as e:
-            logging.error(f"❌ Post-warmup failed: {e}")
-            return {'success': False, 'error': str(e)}
 
 
 # Create Ray actor classes from the base

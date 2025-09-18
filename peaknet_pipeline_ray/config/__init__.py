@@ -4,6 +4,8 @@ from .schemas import (
     ModelConfig,
     RuntimeConfig,
     DataConfig,
+    DataSourceConfig,
+    TransformConfig,
     SystemConfig,
     ProfilingConfig,
     OutputConfig,
@@ -13,8 +15,10 @@ from .data_structures import PipelineInput, PipelineOutput
 
 __all__ = [
     'ModelConfig',
-    'RuntimeConfig', 
+    'RuntimeConfig',
     'DataConfig',
+    'DataSourceConfig',
+    'TransformConfig',
     'SystemConfig',
     'ProfilingConfig',
     'OutputConfig',

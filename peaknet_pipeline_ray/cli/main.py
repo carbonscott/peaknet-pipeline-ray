@@ -107,6 +107,35 @@ def create_parser() -> argparse.ArgumentParser:
         help='Input tensor shape as channels, height, width (e.g., --shape 1 512 512)'
     )
 
+    # Transform configuration
+    transform_group = parser.add_argument_group('transforms', 'Data transformation options')
+    transform_group.add_argument(
+        '--add-channel-dimension',
+        action='store_true',
+        help='Add channel dimension to input data (convert H,W to C,H,W)'
+    )
+    transform_group.add_argument(
+        '--num-channels',
+        type=int,
+        help='Number of channels to add (default: 1)'
+    )
+    transform_group.add_argument(
+        '--channel-dim',
+        type=int,
+        help='Position to insert channel dimension (default: 1)'
+    )
+    transform_group.add_argument(
+        '--pad-to-target',
+        action='store_true',
+        help='Pad input to match target model size'
+    )
+    transform_group.add_argument(
+        '--pad-style',
+        type=str,
+        choices=['center', 'bottom-right'],
+        help='Padding style: center or bottom-right (default: center)'
+    )
+
     # Data source configuration
     data_source_group = parser.add_argument_group('data_source', 'Data source configuration options')
     data_source_group.add_argument(
@@ -236,6 +265,18 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config.data_source.socket_port = args.socket_port
     if hasattr(args, 'socket_timeout') and args.socket_timeout is not None:
         config.data_source.socket_timeout = args.socket_timeout
+
+    # Transform overrides
+    if hasattr(args, 'add_channel_dimension') and args.add_channel_dimension:
+        config.transforms.add_channel_dimension = True
+    if hasattr(args, 'num_channels') and args.num_channels is not None:
+        config.transforms.num_channels = args.num_channels
+    if hasattr(args, 'channel_dim') and args.channel_dim is not None:
+        config.transforms.channel_dim = args.channel_dim
+    if hasattr(args, 'pad_to_target') and args.pad_to_target:
+        config.transforms.pad_to_target = True
+    if hasattr(args, 'pad_style') and args.pad_style is not None:
+        config.transforms.pad_style = args.pad_style
 
     if args.min_gpus is not None:
         config.system.min_gpus = args.min_gpus

@@ -283,25 +283,17 @@ class PeakNetPipeline:
                 print("   📊 NSys profiling enabled - profile files will be generated per actor")
 
         try:
-            # Determine warmup strategy based on data source configuration
-            skip_initial_warmup = False
-            input_shape = self.config.data.shape
-
+            # Determine input shape based on data source configuration
             if self.config.data_source.source_type == "socket":
-                if self.config.data_source.shape is None:
-                    # Post-warmup: skip initial warmup, use socket data to determine shape
-                    skip_initial_warmup = True
-                    if not self.config.output.quiet:
-                        print("   🔄 Post-warmup mode: will warmup after shape detection from socket data")
-                else:
-                    # Pre-warmup: use configured shape for immediate warmup
-                    input_shape = self.config.data_source.shape
-                    if not self.config.output.quiet:
-                        print(f"   ⚡ Pre-warmup mode: using configured socket shape {input_shape}")
-            else:
-                # Random source: always use data.shape for pre-warmup
+                # Socket source: use configured socket shape
+                input_shape = self.config.data_source.shape
                 if not self.config.output.quiet:
-                    print(f"   ⚡ Pre-warmup mode: using random data shape {input_shape}")
+                    print(f"   ⚡ Using configured socket shape {input_shape}")
+            else:
+                # Random source: use data.shape
+                input_shape = self.config.data.shape
+                if not self.config.output.quiet:
+                    print(f"   ⚡ Using random data shape {input_shape}")
 
             actors = create_pipeline_actors(
                 num_actors=actual_num_actors,
@@ -310,6 +302,8 @@ class PeakNetPipeline:
                 # Pipeline configuration
                 input_shape=input_shape,
                 batch_size=self.config.runtime.batch_size,
+                # Transform configuration
+                transform_config=self.config.transforms.__dict__ if self.config.transforms else None,
                 # PeakNet configuration
                 weights_path=self.config.model.weights_path,
                 peaknet_config=self.config.model.peaknet_config,
@@ -317,7 +311,6 @@ class PeakNetPipeline:
                 warmup_samples=self.config.model.warmup_samples,
                 deterministic=True,
                 pin_memory=self.config.system.pin_memory,
-                skip_initial_warmup=skip_initial_warmup
             )
 
             if not self.config.output.quiet:
@@ -784,41 +777,9 @@ class PeakNetPipeline:
             )
             producer_tasks.append(task)
 
-        # Step 4: Handle Post-Warmup Coordination if needed
-        if (self.config.data_source.source_type == "socket" and
-            self.config.data_source.shape is None):
-            if not self.config.output.quiet:
-                print("🔄 Step 4a: Waiting for shape detection from socket producer...")
-
-            # Wait for first producer to detect shape (they should all detect the same shape)
-            # We only need to wait for one producer to detect shape
-            first_producer_result = ray.get(producer_tasks[0])
-
-            if first_producer_result.get('detected_shape'):
-                detected_shape = first_producer_result['detected_shape']
-                if not self.config.output.quiet:
-                    print(f"   ✅ Shape detected: {detected_shape}")
-                    print(f"   🔥 Triggering post-warmup on all {len(actors)} actors...")
-
-                # Trigger post-warmup on all actors
-                warmup_futures = []
-                for i, actor in enumerate(actors):
-                    future = actor.trigger_post_warmup.remote(detected_shape)
-                    warmup_futures.append(future)
-
-                # Wait for all warmups to complete
-                warmup_results = ray.get(warmup_futures)
-                successful_warmups = sum(1 for r in warmup_results if r.get('success', False))
-
-                if not self.config.output.quiet:
-                    print(f"   ✅ Post-warmup completed on {successful_warmups}/{len(actors)} actors")
-            else:
-                if not self.config.output.quiet:
-                    print("   ⚠️  No shape detected, proceeding without post-warmup")
-
-        # Step 4b: Launch Streaming Pipeline Actors
+        # Step 4: Launch Streaming Pipeline Actors
         if not self.config.output.quiet:
-            print("🎭 Step 4b: Launching Streaming Pipeline Actors")
+            print("🎭 Step 4: Launching Streaming Pipeline Actors")
 
         actor_tasks = []
         for i, actor in enumerate(actors):
@@ -841,7 +802,7 @@ class PeakNetPipeline:
 
         start_time = time.time()
 
-        # Wait for producers to complete (some may already be done if post-warmup happened)
+        # Wait for producers to complete
         if not self.config.output.quiet:
             print("\n   Waiting for producers to finish...")
 
@@ -851,7 +812,7 @@ class PeakNetPipeline:
 
         for i, task in enumerate(producer_tasks):
             try:
-                # Check if already completed (from post-warmup wait)
+                # Check if already completed
                 result = ray.get(task, timeout=0.001)
                 completed_results.append(result)
             except:
