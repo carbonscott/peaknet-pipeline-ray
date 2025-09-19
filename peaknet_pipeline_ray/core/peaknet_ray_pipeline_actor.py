@@ -615,6 +615,75 @@ class PeakNetPipelineActorBase:
         except Exception as e:
             logging.warning(f"Warmup failed: {e}, continuing without warmup")
 
+    def graceful_shutdown(self) -> Dict[str, Any]:
+        """
+        Gracefully shutdown the actor with profiling data preservation.
+
+        This method ensures that:
+        1. Current work is completed
+        2. Pipeline is properly synchronized
+        3. Profiling data is flushed (for nsys profiling)
+        4. Resources are cleaned up
+
+        Returns:
+            Dictionary with shutdown status and statistics
+        """
+        try:
+            logging.info(f"Actor {self.gpu_id}: Starting graceful shutdown...")
+            start_time = time.time()
+
+            # Complete any pending pipeline work
+            if hasattr(self, 'pipeline') and self.pipeline is not None:
+                with nvtx.range(f"actor_shutdown_sync_gpu_{self.gpu_id}"):
+                    logging.info(f"Actor {self.gpu_id}: Synchronizing pipeline...")
+                    self.pipeline.wait_for_completion()
+
+                    # Additional GPU synchronization to ensure all CUDA work is done
+                    with torch.cuda.device(self.gpu_id):
+                        torch.cuda.synchronize(self.gpu_id)
+
+                    logging.info(f"Actor {self.gpu_id}: Pipeline synchronization completed")
+
+            # Give nsys profiling time to flush data (important for profile data integrity)
+            if hasattr(self, '_is_profiling_enabled') or 'nsight' in os.environ.get('RAY_RUNTIME_ENV', ''):
+                logging.info(f"Actor {self.gpu_id}: Flushing profiling data...")
+                time.sleep(0.5)  # Allow profiling data to flush
+
+            # Get final statistics
+            final_stats = self.get_statistics()
+            shutdown_time = time.time() - start_time
+
+            logging.info(
+                f"Actor {self.gpu_id}: Graceful shutdown completed in {shutdown_time:.3f}s - "
+                f"processed {final_stats.get('batches_processed', 0)} batches"
+            )
+
+            # Use Ray's graceful exit mechanism
+            ray.actor.exit_actor()
+
+            return {
+                'success': True,
+                'gpu_id': self.gpu_id,
+                'shutdown_time': shutdown_time,
+                'final_stats': final_stats
+            }
+
+        except Exception as e:
+            error_msg = f"Actor {self.gpu_id}: Graceful shutdown failed: {e}"
+            logging.error(error_msg)
+
+            # Force exit if graceful shutdown fails
+            try:
+                ray.actor.exit_actor()
+            except:
+                pass
+
+            return {
+                'success': False,
+                'gpu_id': self.gpu_id,
+                'error': str(e)
+            }
+
 
 
 # Create Ray actor classes from the base

@@ -35,11 +35,15 @@ class StreamingCoordinator:
     def __init__(self):
         """Initialize the coordinator."""
         self.producers_finished = set()  # Set of finished producer IDs
-        self.actors_finished = set()     # Set of finished actor IDs  
+        self.actors_finished = set()     # Set of finished actor IDs
         self.expected_producers = 0
         self.expected_actors = 0
         self.state = "INITIALIZED"
         self.start_time = time.time()
+
+        # Signal-based shutdown support
+        self.signal_shutdown_requested = False
+        self.shutdown_reason = None
 
         logging.info("StreamingCoordinator initialized")
 
@@ -75,6 +79,22 @@ class StreamingCoordinator:
             elapsed = time.time() - self.start_time
             logging.info(f"All {self.expected_producers} producers finished in {elapsed:.2f}s")
 
+    def request_signal_shutdown(self, reason: str = "SIGINT/SIGTERM received") -> None:
+        """Request immediate shutdown due to external signal.
+
+        This method is called when the main process receives a signal (like SIGINT/SIGTERM)
+        and needs to coordinate a graceful shutdown of all actors.
+
+        Args:
+            reason: Reason for the shutdown request
+        """
+        self.signal_shutdown_requested = True
+        self.shutdown_reason = reason
+        self.state = "SIGNAL_SHUTDOWN"
+
+        logging.info(f"Signal shutdown requested: {reason}")
+        logging.info(f"Actors will be notified to shutdown gracefully")
+
     def all_producers_finished(self) -> bool:
         """Check if all expected producers have finished.
 
@@ -88,9 +108,10 @@ class StreamingCoordinator:
 
         This is the primary interface for processing actors to query whether
         they should terminate. The logic is:
-        1. If queue is not empty -> keep processing
-        2. If producers still working -> keep waiting  
-        3. If all producers done AND queue empty -> safe to shutdown
+        1. If signal shutdown requested -> shutdown immediately for profiling data preservation
+        2. If queue is not empty -> keep processing (unless signal shutdown)
+        3. If producers still working -> keep waiting
+        4. If all producers done AND queue empty -> safe to shutdown
 
         Args:
             queue_empty: Whether the actor's input queue is empty
@@ -98,15 +119,20 @@ class StreamingCoordinator:
         Returns:
             True if the actor should shutdown, False if it should continue
         """
-        # If queue has data, keep processing
+        # Priority 1: If signal shutdown was requested, shutdown immediately
+        # This ensures profiling data is saved when user presses Ctrl+C
+        if self.signal_shutdown_requested:
+            return True
+
+        # Priority 2: If queue has data, keep processing
         if not queue_empty:
             return False
 
-        # If producers still working, keep waiting for more data
+        # Priority 3: If producers still working, keep waiting for more data
         if self.state != "PRODUCERS_FINISHED":
             return False
 
-        # All producers done AND queue empty = safe to shutdown
+        # Priority 4: All producers done AND queue empty = safe to shutdown
         return True
 
     def register_actor_finished(self, actor_id: str) -> None:
@@ -138,12 +164,14 @@ class StreamingCoordinator:
             'state': self.state,
             'producers_finished': len(self.producers_finished),
             'expected_producers': self.expected_producers,
-            'actors_finished': len(self.actors_finished), 
+            'actors_finished': len(self.actors_finished),
             'expected_actors': self.expected_actors,
             'all_producers_finished': self.all_producers_finished(),
             'uptime_seconds': time.time() - self.start_time,
             'finished_producer_ids': list(self.producers_finished),
-            'finished_actor_ids': list(self.actors_finished)
+            'finished_actor_ids': list(self.actors_finished),
+            'signal_shutdown_requested': self.signal_shutdown_requested,
+            'shutdown_reason': self.shutdown_reason
         }
 
     def is_completed(self) -> bool:

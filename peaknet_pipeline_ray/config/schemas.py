@@ -16,7 +16,7 @@ class ModelConfig:
     warmup_samples: int = 500  # 0 = skip warmup
 
 
-@dataclass  
+@dataclass
 class RuntimeConfig:
     """Runtime configuration for pipeline execution."""
     max_actors: Optional[int] = None  # Auto-scale to available GPUs
@@ -28,6 +28,9 @@ class RuntimeConfig:
     # Queue configuration
     queue_num_shards: int = 4  # Number of queue shards for parallel access
     queue_maxsize_per_shard: int = 100  # Maximum items per shard (total capacity = shards * maxsize)
+    # Coordination timing configuration
+    max_empty_polls: int = 20  # Check coordinator after N consecutive empty polls
+    poll_timeout: float = 0.01  # Timeout for queue polling in seconds
 
 
 @dataclass
@@ -177,7 +180,11 @@ class PipelineConfig:
                 'total_samples': self.runtime.total_samples,
                 'num_producers': self.runtime.num_producers,
                 'batches_per_producer': self.runtime.batches_per_producer,
-                'inter_batch_delay': self.runtime.inter_batch_delay
+                'inter_batch_delay': self.runtime.inter_batch_delay,
+                'queue_num_shards': self.runtime.queue_num_shards,
+                'queue_maxsize_per_shard': self.runtime.queue_maxsize_per_shard,
+                'max_empty_polls': self.runtime.max_empty_polls,
+                'poll_timeout': self.runtime.poll_timeout
             },
             'data': {
                 'shape': list(self.data.shape)

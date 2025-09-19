@@ -96,6 +96,16 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         help='Maximum items per queue shard'
     )
+    runtime_group.add_argument(
+        '--max-empty-polls',
+        type=int,
+        help='Check coordinator after N consecutive empty polls'
+    )
+    runtime_group.add_argument(
+        '--poll-timeout',
+        type=float,
+        help='Timeout for queue polling in seconds'
+    )
 
     # Data configuration
     data_group = parser.add_argument_group('data', 'Data configuration options')
@@ -252,6 +262,10 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config.runtime.queue_num_shards = args.queue_shards
     if args.queue_size_per_shard is not None:
         config.runtime.queue_maxsize_per_shard = args.queue_size_per_shard
+    if args.max_empty_polls is not None:
+        config.runtime.max_empty_polls = args.max_empty_polls
+    if args.poll_timeout is not None:
+        config.runtime.poll_timeout = args.poll_timeout
 
     if args.shape is not None:
         config.data.shape = tuple(args.shape)
@@ -323,10 +337,15 @@ def main(argv: Optional[list] = None) -> int:
             print(f"  Max actors: {config.runtime.max_actors}")
             print(f"  Batch size: {config.runtime.batch_size}")
             print(f"  Total samples: {config.runtime.total_samples}")
+            print(f"  Queue shards: {config.runtime.queue_num_shards}")
+            print(f"  Queue size per shard: {config.runtime.queue_maxsize_per_shard}")
+            print(f"  Total queue capacity: {config.runtime.queue_num_shards * config.runtime.queue_maxsize_per_shard}")
+            print(f"  Coordination timing: {config.runtime.max_empty_polls} polls × {config.runtime.poll_timeout*1000:.1f}ms = {config.runtime.max_empty_polls * config.runtime.poll_timeout:.1f}s delay")
             print(f"  Data shape: {config.data.shape}")
             print(f"  Data source: {config.data_source.source_type}")
             if config.data_source.source_type == "socket":
                 print(f"  Socket: {config.data_source.socket_hostname}:{config.data_source.socket_port}")
+                print(f"  Note: total_samples parameter is ignored for socket data sources")
             print(f"  Min GPUs: {config.system.min_gpus}")
             print(f"  Profiling: {config.profiling.enable_profiling}")
 

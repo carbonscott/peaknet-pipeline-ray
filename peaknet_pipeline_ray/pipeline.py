@@ -10,6 +10,10 @@ import os
 import logging
 import time
 import sys
+import signal
+import threading
+import glob
+import shutil
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -61,6 +65,13 @@ class PeakNetPipeline:
         self.config = config
         self.logger = self._setup_logging()
 
+        # Signal handling for graceful shutdown
+        self.shutdown_event = threading.Event()
+        self.actors = []  # Store actor references for cleanup
+        self.coordinator = None  # Store coordinator reference for cleanup
+        self._original_sigint_handler = None
+        self._original_sigterm_handler = None
+
     def _setup_logging(self) -> logging.Logger:
         """Configure logging based on configuration."""
         logger = logging.getLogger('peaknet_pipeline')
@@ -79,6 +90,218 @@ class PeakNetPipeline:
 
         return logger
 
+    def _setup_signal_handlers(self) -> None:
+        """Set up signal handlers for graceful shutdown with profiling."""
+        def signal_handler(signum, frame):
+            signal_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
+            if not self.config.output.quiet:
+                print(f"\n🛑 Received {signal_name} - initiating graceful shutdown...")
+                if self.config.profiling.enable_profiling:
+                    print("   📊 Ensuring nsys profiling data is saved...")
+
+            self.shutdown_event.set()
+
+            # Notify coordinator of signal shutdown if available
+            if self.coordinator is not None:
+                try:
+                    ray.get(self.coordinator.request_signal_shutdown.remote(f"{signal_name} received"))
+                except Exception as e:
+                    if not self.config.output.quiet:
+                        print(f"   ⚠️  Failed to notify coordinator of shutdown: {e}")
+
+        # Store original handlers to restore them later
+        self._original_sigint_handler = signal.signal(signal.SIGINT, signal_handler)
+        self._original_sigterm_handler = signal.signal(signal.SIGTERM, signal_handler)
+
+    def _restore_signal_handlers(self) -> None:
+        """Restore original signal handlers."""
+        if self._original_sigint_handler is not None:
+            signal.signal(signal.SIGINT, self._original_sigint_handler)
+        if self._original_sigterm_handler is not None:
+            signal.signal(signal.SIGTERM, self._original_sigterm_handler)
+
+    def _graceful_shutdown_actors(self) -> None:
+        """Gracefully shutdown all pipeline actors."""
+        if not self.actors:
+            return
+
+        if not self.config.output.quiet:
+            print(f"   🎭 Gracefully shutting down {len(self.actors)} actors...")
+
+        shutdown_futures = []
+
+        # Try graceful shutdown first
+        for i, actor in enumerate(self.actors):
+            try:
+                # Send shutdown signal to actor
+                future = actor.graceful_shutdown.remote()
+                shutdown_futures.append((i, future))
+            except Exception as e:
+                if self.config.output.verbose:
+                    print(f"   ⚠️  Actor {i}: Failed to send shutdown signal: {e}")
+
+        # Wait for graceful shutdowns with timeout
+        timeout = 10.0  # seconds
+        start_time = time.time()
+
+        for i, future in shutdown_futures:
+            remaining_time = timeout - (time.time() - start_time)
+            if remaining_time <= 0:
+                if not self.config.output.quiet:
+                    print(f"   ⏰ Timeout waiting for actor {i} shutdown")
+                break
+
+            try:
+                ray.get(future, timeout=min(remaining_time, 2.0))
+                if self.config.output.verbose:
+                    print(f"   ✅ Actor {i}: Graceful shutdown completed")
+            except ray.exceptions.GetTimeoutError:
+                if not self.config.output.quiet:
+                    print(f"   ⏰ Actor {i}: Shutdown timeout, forcing termination")
+            except Exception as e:
+                if self.config.output.verbose:
+                    print(f"   ⚠️  Actor {i}: Shutdown error: {e}")
+
+        # Clear actor references
+        self.actors.clear()
+
+        if not self.config.output.quiet:
+            print("   ✅ Actor shutdown completed")
+
+    def _collect_profiling_data(self) -> Dict[str, Any]:
+        """Collect and validate nsys profiling data after shutdown.
+
+        Returns:
+            Dictionary with profiling data collection results
+        """
+        if not self.config.profiling.enable_profiling:
+            return {'enabled': False, 'message': 'Profiling not enabled'}
+
+        try:
+            # Find Ray session directory
+            ray_temp_dir = "/tmp/ray"
+            if not os.path.exists(ray_temp_dir):
+                return {'success': False, 'error': 'Ray temp directory not found'}
+
+            # Look for the most recent session
+            session_pattern = os.path.join(ray_temp_dir, "session_*")
+            session_dirs = glob.glob(session_pattern)
+            if not session_dirs:
+                return {'success': False, 'error': 'No Ray session directories found'}
+
+            # Get the most recent session directory
+            latest_session = max(session_dirs, key=os.path.getmtime)
+            nsight_dir = os.path.join(latest_session, "logs", "nsight")
+
+            if not os.path.exists(nsight_dir):
+                return {'success': False, 'error': f'Nsight logs directory not found: {nsight_dir}'}
+
+            # Find all .nsys-rep files
+            nsys_pattern = os.path.join(nsight_dir, "**", "*.nsys-rep")
+            nsys_files = glob.glob(nsys_pattern, recursive=True)
+
+            if not nsys_files:
+                return {'success': False, 'error': f'No .nsys-rep files found in {nsight_dir}'}
+
+            # Validate and collect file information
+            valid_files = []
+            total_size = 0
+
+            for nsys_file in nsys_files:
+                try:
+                    file_stat = os.stat(nsys_file)
+                    file_size = file_stat.st_size
+
+                    # Basic validation - file should be > 1KB (very basic check)
+                    if file_size > 1024:
+                        valid_files.append({
+                            'path': nsys_file,
+                            'size_mb': file_size / (1024 * 1024),
+                            'mtime': file_stat.st_mtime
+                        })
+                        total_size += file_size
+                    else:
+                        if self.config.output.verbose:
+                            print(f"   ⚠️  Skipping small profile file: {nsys_file} ({file_size} bytes)")
+
+                except OSError as e:
+                    if self.config.output.verbose:
+                        print(f"   ⚠️  Cannot access profile file: {nsys_file} - {e}")
+
+            # Copy files to output directory if specified
+            copied_files = []
+            if self.config.profiling.output_dir and valid_files:
+                output_dir = Path(self.config.profiling.output_dir)
+                output_dir.mkdir(parents=True, exist_ok=True)
+
+                for file_info in valid_files:
+                    src_path = file_info['path']
+                    filename = os.path.basename(src_path)
+                    # Add timestamp to avoid conflicts
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    dest_filename = f"{timestamp}_{filename}"
+                    dest_path = output_dir / dest_filename
+
+                    try:
+                        shutil.copy2(src_path, dest_path)
+                        copied_files.append(str(dest_path))
+                        if self.config.output.verbose:
+                            print(f"   📁 Copied profile: {dest_path}")
+                    except Exception as e:
+                        if self.config.output.verbose:
+                            print(f"   ⚠️  Failed to copy {src_path}: {e}")
+
+            return {
+                'success': True,
+                'nsight_dir': nsight_dir,
+                'files_found': len(valid_files),
+                'total_size_mb': total_size / (1024 * 1024),
+                'valid_files': valid_files,
+                'copied_files': copied_files
+            }
+
+        except Exception as e:
+            return {'success': False, 'error': f'Profile collection failed: {e}'}
+
+    def _print_profiling_summary(self, profile_results: Dict[str, Any]) -> None:
+        """Print summary of profiling data collection."""
+        if not self.config.profiling.enable_profiling or self.config.output.quiet:
+            return
+
+        print("\n📊 Profiling Data Summary:")
+        print("=" * 45)
+
+        if not profile_results.get('success', False):
+            print(f"❌ Failed to collect profiling data: {profile_results.get('error', 'Unknown error')}")
+            print("\n💡 Troubleshooting:")
+            print("   • Ensure nsys profiling was actually enabled (--enable-profiling)")
+            print("   • Check Ray logs for nsight profiling errors")
+            print("   • Verify actors had enough time to generate profile data")
+            return
+
+        files_found = profile_results.get('files_found', 0)
+        total_size = profile_results.get('total_size_mb', 0)
+
+        print(f"✅ Successfully collected profiling data:")
+        print(f"   📁 Profile files found: {files_found}")
+        print(f"   💾 Total size: {total_size:.1f} MB")
+        print(f"   📂 Source directory: {profile_results.get('nsight_dir', 'N/A')}")
+
+        copied_files = profile_results.get('copied_files', [])
+        if copied_files:
+            print(f"   📋 Copied to output directory: {len(copied_files)} files")
+            if self.config.output.verbose:
+                for copied_file in copied_files:
+                    print(f"      • {copied_file}")
+
+        print("\n💡 Next steps:")
+        print("   • Open .nsys-rep files with NVIDIA Nsight Systems GUI")
+        print("   • Use 'nsys stats <file.nsys-rep>' for command-line analysis")
+        if copied_files:
+            print(f"   • Profile files saved to: {self.config.profiling.output_dir}")
+        else:
+            print(f"   • Find original files in: {profile_results.get('nsight_dir', 'Ray logs')}")
+
     def run(self, total_samples: Optional[int] = None) -> PipelineResults:
         """
         Run the complete pipeline workflow.
@@ -94,6 +317,9 @@ class PeakNetPipeline:
             self.config.runtime.total_samples = total_samples
 
         try:
+            # Setup signal handlers for graceful shutdown
+            self._setup_signal_handlers()
+
             # Validate configuration
             self._validate_config()
 
@@ -109,11 +335,13 @@ class PeakNetPipeline:
 
             # Step 3: Create GPU Actors
             actors = self._create_gpu_actors(healthy_gpus)
+            # Store actors for graceful shutdown
+            self.actors = actors
 
             # Step 4: Generate Streaming Data
             all_batches = self._generate_streaming_data()
 
-            # Step 5: Process Data
+            # Step 5: Process Data with graceful shutdown support
             performance = self._process_streaming_data(actors, all_batches)
 
             # Step 6: Results and cleanup
@@ -126,9 +354,19 @@ class PeakNetPipeline:
             return PipelineResults(success=performance['success'], performance=performance)
 
         except KeyboardInterrupt:
+            # This should rarely be hit now since we have signal handlers
             error = "Pipeline interrupted by user"
             if not self.config.output.quiet:
                 print(f"\n⚠️  {error}")
+            self._graceful_shutdown_actors()
+
+            # Collect profiling data after graceful shutdown
+            if self.config.profiling.enable_profiling:
+                if not self.config.output.quiet:
+                    print("\n📊 Collecting profiling data...")
+                profile_results = self._collect_profiling_data()
+                self._print_profiling_summary(profile_results)
+
             return PipelineResults(success=False, performance={}, error=error)
 
         except Exception as e:
@@ -138,7 +376,36 @@ class PeakNetPipeline:
                 if self.config.output.verbose:
                     import traceback
                     traceback.print_exc()
+            self._graceful_shutdown_actors()
+
+            # Collect profiling data even after exception
+            if self.config.profiling.enable_profiling:
+                if not self.config.output.quiet:
+                    print("\n📊 Collecting profiling data...")
+                profile_results = self._collect_profiling_data()
+                self._print_profiling_summary(profile_results)
+
             return PipelineResults(success=False, performance={}, error=str(e))
+
+        finally:
+            # Always restore signal handlers and cleanup
+            self._restore_signal_handlers()
+
+            # Check if we received a shutdown signal
+            if self.shutdown_event.is_set():
+                self._graceful_shutdown_actors()
+
+                # Collect profiling data after graceful shutdown
+                if self.config.profiling.enable_profiling:
+                    if not self.config.output.quiet:
+                        print("\n📊 Collecting profiling data...")
+                    profile_results = self._collect_profiling_data()
+                    self._print_profiling_summary(profile_results)
+
+                error = "Pipeline gracefully shutdown due to signal"
+                if not self.config.output.quiet:
+                    print(f"\n✅ {error}")
+                return PipelineResults(success=False, performance={}, error=error)
 
     def _validate_config(self) -> None:
         """Validate configuration parameters."""
@@ -441,6 +708,12 @@ class PeakNetPipeline:
 
         try:
             for i, future in enumerate(processing_futures):
+                # Check for shutdown signal before processing each batch
+                if self.shutdown_event.is_set():
+                    if not self.config.output.quiet:
+                        print(f"\n🛑 Shutdown requested - stopping after {completed}/{total_batches} batches")
+                    break
+
                 result = ray.get(future, timeout=30)
                 results.append(result)
                 completed += 1
@@ -734,6 +1007,9 @@ class PeakNetPipeline:
             expected_actors=len(actors)
         )
 
+        # Store coordinator reference for signal handling
+        self.coordinator = coordinator
+
         # Step 2: Create Queues
         if not self.config.output.quiet:
             print("📦 Step 2: Creating Queue Infrastructure")
@@ -787,8 +1063,8 @@ class PeakNetPipeline:
                 q1_manager,
                 q2_manager,
                 coordinator,
-                max_empty_polls=20,  # Check coordinator after 20 empty polls
-                poll_timeout=0.01,   # 10ms poll timeout
+                max_empty_polls=runtime.max_empty_polls,  # From config
+                poll_timeout=runtime.poll_timeout,   # From config
                 memory_sync_interval=200  # Sync every 200 batches for memory management
             )
             actor_tasks.append(task)
