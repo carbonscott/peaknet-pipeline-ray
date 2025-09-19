@@ -1045,12 +1045,23 @@ class PeakNetPipeline:
 
         producer_tasks = []
         for i, producer in enumerate(producers):
-            task = producer.stream_batches_to_queue.remote(
-                q1_manager, 
-                batches_per_producer, 
-                coordinator,
-                progress_interval=max(10, batches_per_producer // 10)
-            )
+            # Use appropriate method based on producer type
+            if self.config.data_source.source_type == "socket":
+                # Lightweight socket producers use different method name
+                task = producer.stream_raw_bytes_to_queue.remote(
+                    q1_manager,
+                    batches_per_producer,
+                    coordinator,
+                    progress_interval=max(10, batches_per_producer // 10)
+                )
+            else:
+                # Standard producers (random data, etc.)
+                task = producer.stream_batches_to_queue.remote(
+                    q1_manager,
+                    batches_per_producer,
+                    coordinator,
+                    progress_interval=max(10, batches_per_producer // 10)
+                )
             producer_tasks.append(task)
 
         # Step 4: Launch Streaming Pipeline Actors
@@ -1161,17 +1172,16 @@ class PeakNetPipeline:
             List of producer actors
         """
         if self.config.data_source.source_type == "socket":
-            # Create socket HDF5 producers
-            from .core.socket_hdf5_producer import create_socket_hdf5_producers
+            # Create lightweight socket producers for optimal CPU/GPU overlap
+            from .core.lightweight_socket_producer import create_lightweight_socket_producers
 
             if not self.config.output.quiet:
                 print(f"   Socket: {self.config.data_source.socket_hostname}:{self.config.data_source.socket_port}")
-                print(f"   HDF5 fields: {list(self.config.data_source.fields.keys())}")
+                print(f"   Optimization: Raw bytes → Pipeline parsing for zero gaps")
 
-            return create_socket_hdf5_producers(
+            return create_lightweight_socket_producers(
                 num_producers=runtime.num_producers,
                 config=self.config.data_source,
-                batch_size=runtime.batch_size,
                 deterministic=False
             )
         else:

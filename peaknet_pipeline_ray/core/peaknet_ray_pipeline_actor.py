@@ -469,8 +469,11 @@ class PeakNetPipelineActorBase:
                     # Swap buffers but DO NOT sync - this is key to maintaining overlap
                     self.pipeline.swap()
 
-                # Extract data from PipelineInput
-                if hasattr(batch_data, 'get_torch_tensor'):
+                # Extract data from different sources
+                if hasattr(batch_data, 'raw_bytes'):
+                    # NEW: RawSocketData - parse HDF5 during GPU overlap
+                    cpu_tensors = self._parse_raw_socket_data(batch_data)
+                elif hasattr(batch_data, 'get_torch_tensor'):
                     # PipelineInput object - get as individual tensors
                     batch_tensor = batch_data.get_torch_tensor(device='cpu')
                     # Convert to list of individual tensors for pipeline compatibility
@@ -571,6 +574,77 @@ class PeakNetPipelineActorBase:
             )
 
             return result
+
+    def _parse_raw_socket_data(self, raw_socket_data) -> List[torch.Tensor]:
+        """
+        Parse raw HDF5 bytes into tensors during GPU compute overlap.
+
+        This method executes the HDF5 parsing and tensor creation that was
+        moved from the socket producer to achieve CPU/GPU overlap.
+
+        Args:
+            raw_socket_data: RawSocketData object with raw HDF5 bytes
+
+        Returns:
+            List of torch tensors ready for pipeline processing
+        """
+        import h5py
+        import hdf5plugin
+        from io import BytesIO
+        import numpy as np
+
+        try:
+            # Parse HDF5 data from raw bytes
+            with h5py.File(BytesIO(raw_socket_data.raw_bytes), 'r') as h5_file:
+                # Extract detector data (adapt field mapping as needed)
+                detector_data = None
+
+                # Try common detector data paths
+                possible_paths = ['/data/data', '/entry/data/detector_data', '/detector_data']
+                for path in possible_paths:
+                    if path in h5_file:
+                        detector_data = h5_file[path][:]
+                        break
+
+                if detector_data is None:
+                    # Fallback: use first available dataset
+                    for key in h5_file.keys():
+                        if hasattr(h5_file[key], 'shape'):
+                            detector_data = h5_file[key][:]
+                            logging.debug(f"Actor {self.gpu_id}: Using fallback field '{key}' for detector data")
+                            break
+
+                if detector_data is None:
+                    raise ValueError("No detector data found in HDF5")
+
+                # Convert to numpy array if needed
+                if not isinstance(detector_data, np.ndarray):
+                    detector_data = np.array(detector_data)
+
+                # Keep raw shapes - let configured transforms handle dimension management
+                # This matches the original socket_hdf5_producer.py behavior
+                if len(detector_data.shape) == 2:
+                    # Single sample: (H, W) - keep as-is for transforms
+                    cpu_tensors = [torch.from_numpy(detector_data.astype(np.float32))]
+                elif len(detector_data.shape) == 3:
+                    # Multiple samples: (B, H, W) - extract individual (H, W) samples
+                    cpu_tensors = [torch.from_numpy(detector_data[i].astype(np.float32))
+                                 for i in range(detector_data.shape[0])]
+                else:
+                    raise ValueError(f"Unexpected detector data shape: {detector_data.shape}. Expected (H,W) or (B,H,W)")
+
+                logging.debug(
+                    f"Actor {self.gpu_id}: Parsed raw HDF5 -> {len(cpu_tensors)} tensors, "
+                    f"raw_shape={cpu_tensors[0].shape if cpu_tensors else 'empty'} (transforms will handle dimensions)"
+                )
+
+                return cpu_tensors
+
+        except Exception as e:
+            logging.error(f"Actor {self.gpu_id}: Failed to parse raw socket data: {e}")
+            # Return empty tensor as fallback to prevent pipeline crash
+            fallback_tensor = torch.zeros(self.input_shape, dtype=torch.float32)
+            return [fallback_tensor]
 
     def _run_warmup(self, warmup_samples: int, input_shape: Tuple[int, int, int]) -> None:
         """Run model warmup with synthetic data.
