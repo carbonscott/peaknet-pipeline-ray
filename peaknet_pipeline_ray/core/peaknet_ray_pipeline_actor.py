@@ -530,11 +530,15 @@ class PeakNetPipelineActorBase:
         This method executes the HDF5 parsing and tensor creation that was
         moved from the socket producer to achieve CPU/GPU overlap.
 
+        The producer now sends preprocessed data in (B, C, H, W) format,
+        which is extracted into individual (C, H, W) tensors for the pipeline.
+
         Args:
-            raw_socket_data: RawSocketData object with raw HDF5 bytes
+            raw_socket_data: RawSocketData object with raw HDF5 bytes containing
+                           detector data in (B, C, H, W) format
 
         Returns:
-            List of torch tensors ready for pipeline processing
+            List of torch tensors, each with shape (C, H, W) ready for pipeline processing
         """
         import h5py
         import hdf5plugin
@@ -569,21 +573,17 @@ class PeakNetPipelineActorBase:
                 if not isinstance(detector_data, np.ndarray):
                     detector_data = np.array(detector_data)
 
-                # Keep raw shapes - let configured transforms handle dimension management
-                # This matches the original socket_hdf5_producer.py behavior
-                if len(detector_data.shape) == 2:
-                    # Single sample: (H, W) - keep as-is for transforms
-                    cpu_tensors = [torch.from_numpy(detector_data.astype(np.float32))]
-                elif len(detector_data.shape) == 3:
-                    # Multiple samples: (B, H, W) - extract individual (H, W) samples
-                    cpu_tensors = [torch.from_numpy(detector_data[i].astype(np.float32))
-                                 for i in range(detector_data.shape[0])]
-                else:
-                    raise ValueError(f"Unexpected detector data shape: {detector_data.shape}. Expected (H,W) or (B,H,W)")
+                # Producer now always sends preprocessed data in (B, C, H, W) format
+                if len(detector_data.shape) != 4:
+                    raise ValueError(f"Unexpected detector data shape: {detector_data.shape}. Expected (B, C, H, W) format from preprocessed producer")
+
+                # Extract individual (C, H, W) samples from (B, C, H, W) batch
+                cpu_tensors = [torch.from_numpy(detector_data[i].astype(np.float32))
+                             for i in range(detector_data.shape[0])]
 
                 logging.debug(
                     f"Actor {self.gpu_id}: Parsed raw HDF5 -> {len(cpu_tensors)} tensors, "
-                    f"raw_shape={cpu_tensors[0].shape if cpu_tensors else 'empty'} (transforms will handle dimensions)"
+                    f"each with shape {cpu_tensors[0].shape if cpu_tensors else 'empty'} (preprocessed from producer)"
                 )
 
                 return cpu_tensors
