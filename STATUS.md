@@ -62,4 +62,5 @@ export PIPELINE_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-
 ### Problems
 
 - Preprocessing in Q1 to P might be a bottleneck.  I have some evidence in the
-  nsys profiling results.
+  nsys profiling results.  Let me try to implement the preprocessing directly in
+  the producer code in $STREAMER_DIR.
