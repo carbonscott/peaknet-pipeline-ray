@@ -25,20 +25,14 @@ export PIPELINE_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-
 
 #### **S to Q1**
 
-- An exact working version does NOT exist yet.
+- An exact working version exists now, but may not be perfect.  I still suspect
+  there's bottleneck in serving the data.
 - A simulated S to Q1 exists in `$PIPELINE_DEV_DIR/peaknet_pipeline_ray/core/peaknet_ray_data_producer.py`, where the socket data source is replaced by a random tensor data source.
 - When you launch command like
   ```
   peaknet-pipeline --config examples/configs/peaknet.yaml --max-actors 4 --total-samples 10240 --verbose
   ```
   it calls the simulated data source under the hood.
-
-- **A priority** to find a good way to repurpose or adapt the pull script in
-  `TEST_DIR/psana_pull_script_inspect.py` into our pipeline data source codes in
-  `$PIPELINE_DEV_DIR` so that we truly enable socket data source, while keeping
-  the random data source for testing purposes.  I prefer you have a clean new
-  file to implement the socket data source.  It's not a good to merge it with
-  the random data source into one script.
 
 #### **Q1 to P**
 
@@ -63,3 +57,9 @@ export PIPELINE_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-
 
 - The data writer does NOT exist yet.
 - **Not a priority** right now.
+
+
+### Problems
+
+- Preprocessing in Q1 to P might be a bottleneck.  I have some evidence in the
+  nsys profiling results.

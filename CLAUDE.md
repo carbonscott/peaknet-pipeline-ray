@@ -61,5 +61,8 @@ Ask me now to add all relevant directories to working directories.
 
 Path: `/sdf/data/lcls/ds/prj/prjcwang31/results/codes/ray/doc/`
 
+When programming in Ray, be careful about its patterns and anti-patterns, which
+are discussed in `/sdf/data/lcls/ds/prj/prjcwang31/results/codes/ray/doc/source/ray-core/patterns`
+
 Ray APIs can be confusing.  Please look up the documentation before making your
 decisions.
