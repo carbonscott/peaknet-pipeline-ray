@@ -569,8 +569,6 @@ class PeakNetPipeline:
                 # Pipeline configuration
                 input_shape=input_shape,
                 batch_size=self.config.runtime.batch_size,
-                # Transform configuration
-                transform_config=self.config.transforms.__dict__ if self.config.transforms else None,
                 # PeakNet configuration
                 weights_path=self.config.model.weights_path,
                 peaknet_config=self.config.model.peaknet_config,

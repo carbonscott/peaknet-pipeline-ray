@@ -70,14 +70,6 @@ class DataSourceConfig:
     required_fields: list = field(default_factory=lambda: ["detector_data"])
 
 
-@dataclass
-class TransformConfig:
-    """Configuration for data transformations."""
-    add_channel_dimension: bool = False
-    num_channels: int = 1
-    channel_dim: int = 1
-    pad_to_target: bool = False
-    pad_style: str = "center"
 
 
 @dataclass
@@ -111,7 +103,6 @@ class PipelineConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     data: DataConfig = field(default_factory=DataConfig)
     data_source: DataSourceConfig = field(default_factory=DataSourceConfig)
-    transforms: TransformConfig = field(default_factory=TransformConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
     profiling: ProfilingConfig = field(default_factory=ProfilingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -146,8 +137,6 @@ class PipelineConfig:
             data_source_dict['shape'] = tuple(data_source_dict['shape'])
         data_source_config = DataSourceConfig(**data_source_dict)
 
-        # Extract transform config
-        transform_config = TransformConfig(**config_dict.get('transforms', {}))
 
         system_config = SystemConfig(**config_dict.get('system', {}))
         profiling_config = ProfilingConfig(**config_dict.get('profiling', {}))
@@ -158,7 +147,6 @@ class PipelineConfig:
             runtime=runtime_config,
             data=data_config,
             data_source=data_source_config,
-            transforms=transform_config,
             system=system_config,
             profiling=profiling_config,
             output=output_config
@@ -200,13 +188,6 @@ class PipelineConfig:
                 'batch_assembly': self.data_source.batch_assembly,
                 'batch_timeout': self.data_source.batch_timeout,
                 'required_fields': self.data_source.required_fields
-            },
-            'transforms': {
-                'add_channel_dimension': self.transforms.add_channel_dimension,
-                'num_channels': self.transforms.num_channels,
-                'channel_dim': self.transforms.channel_dim,
-                'pad_to_target': self.transforms.pad_to_target,
-                'pad_style': self.transforms.pad_style
             },
             'system': {
                 'min_gpus': self.system.min_gpus,

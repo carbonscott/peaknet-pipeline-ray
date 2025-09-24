@@ -280,17 +280,6 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
     if hasattr(args, 'socket_timeout') and args.socket_timeout is not None:
         config.data_source.socket_timeout = args.socket_timeout
 
-    # Transform overrides
-    if hasattr(args, 'add_channel_dimension') and args.add_channel_dimension:
-        config.transforms.add_channel_dimension = True
-    if hasattr(args, 'num_channels') and args.num_channels is not None:
-        config.transforms.num_channels = args.num_channels
-    if hasattr(args, 'channel_dim') and args.channel_dim is not None:
-        config.transforms.channel_dim = args.channel_dim
-    if hasattr(args, 'pad_to_target') and args.pad_to_target:
-        config.transforms.pad_to_target = True
-    if hasattr(args, 'pad_style') and args.pad_style is not None:
-        config.transforms.pad_style = args.pad_style
 
     if args.min_gpus is not None:
         config.system.min_gpus = args.min_gpus

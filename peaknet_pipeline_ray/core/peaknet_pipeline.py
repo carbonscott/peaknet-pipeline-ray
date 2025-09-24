@@ -195,7 +195,7 @@ class DoubleBufferedPipeline:
     Internal methods are private to encourage proper encapsulation.
     """
 
-    def __init__(self, model, batch_size, input_shape, output_shape, gpu_id, pin_memory=True, transforms=None):
+    def __init__(self, model, batch_size, input_shape, output_shape, gpu_id, pin_memory=True):
         self.model = model
         self.batch_size = batch_size
         self.input_shape = input_shape
@@ -203,8 +203,6 @@ class DoubleBufferedPipeline:
         self.gpu_id = gpu_id
         self.pin_memory = pin_memory
 
-        # Store transforms for preprocessing
-        self.transforms = transforms if transforms is not None else []
 
         # Check if model is None (no-op mode)
         self.is_noop = (self.model is None)
@@ -286,21 +284,9 @@ class DoubleBufferedPipeline:
                 if batch_idx > 0:
                     self.h2d_stream.wait_event(d2h_event)
 
-                # Apply transforms if configured, then copy to GPU
-                if self.transforms:
-                    # Stack individual tensors into batch tensor for transforms
-                    batch_tensor = torch.stack(cpu_batch[:current_batch_size])
-
-                    # Apply transforms in sequence
-                    for transform in self.transforms:
-                        batch_tensor = transform(batch_tensor)
-
-                    # Copy transformed batch to GPU buffer
-                    gpu_buffer[:current_batch_size].copy_(batch_tensor, non_blocking=True)
-                else:
-                    # Direct copy - no preprocessing (user responsible for correct input shape)
-                    for i in range(current_batch_size):
-                        gpu_buffer[i].copy_(cpu_batch[i], non_blocking=True)
+                # Direct copy - no preprocessing (producer responsible for correct input shape)
+                for i in range(current_batch_size):
+                    gpu_buffer[i].copy_(cpu_batch[i], non_blocking=True)
 
                 # Record H2D completion event for this specific buffer
                 self.h2d_stream.record_event(h2d_event)
