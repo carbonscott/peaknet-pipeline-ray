@@ -73,6 +73,12 @@ class DataSourceConfig:
 
 
 @dataclass
+class PrecisionConfig:
+    """Configuration for mixed precision inference."""
+    dtype: str = "float32"  # Options: "float32", "bfloat16", "float16"
+
+
+@dataclass
 class SystemConfig:
     """System configuration for hardware and resources."""
     min_gpus: int = 1
@@ -103,6 +109,7 @@ class PipelineConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     data: DataConfig = field(default_factory=DataConfig)
     data_source: DataSourceConfig = field(default_factory=DataSourceConfig)
+    precision: PrecisionConfig = field(default_factory=PrecisionConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
     profiling: ProfilingConfig = field(default_factory=ProfilingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -137,7 +144,7 @@ class PipelineConfig:
             data_source_dict['shape'] = tuple(data_source_dict['shape'])
         data_source_config = DataSourceConfig(**data_source_dict)
 
-
+        precision_config = PrecisionConfig(**config_dict.get('precision', {}))
         system_config = SystemConfig(**config_dict.get('system', {}))
         profiling_config = ProfilingConfig(**config_dict.get('profiling', {}))
         output_config = OutputConfig(**config_dict.get('output', {}))
@@ -147,6 +154,7 @@ class PipelineConfig:
             runtime=runtime_config,
             data=data_config,
             data_source=data_source_config,
+            precision=precision_config,
             system=system_config,
             profiling=profiling_config,
             output=output_config
@@ -188,6 +196,9 @@ class PipelineConfig:
                 'batch_assembly': self.data_source.batch_assembly,
                 'batch_timeout': self.data_source.batch_timeout,
                 'required_fields': self.data_source.required_fields
+            },
+            'precision': {
+                'dtype': self.precision.dtype
             },
             'system': {
                 'min_gpus': self.system.min_gpus,

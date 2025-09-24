@@ -19,6 +19,7 @@ import os
 
 # Import existing pipeline components
 from .peaknet_pipeline import DoubleBufferedPipeline, create_peaknet_model, get_numa_info, get_gpu_info
+from .peaknet_utils import create_autocast_context
 # GPU health validation now handled at system level before Ray initialization
 
 
@@ -47,6 +48,7 @@ class PeakNetPipelineActorBase:
         warmup_samples: int = 500,
         deterministic: bool = False,
         gpu_id: int = None,
+        precision_dtype: str = "float32",
     ):
         """
         Initialize the pipeline actor.
@@ -61,6 +63,7 @@ class PeakNetPipelineActorBase:
             warmup_samples: Number of warmup samples (0 = skip warmup)
             deterministic: Use deterministic operations
             gpu_id: Explicit GPU ID to use (None for Ray auto-assignment)
+            precision_dtype: Precision type for mixed precision ('float32', 'bfloat16', 'float16')
         """
         logging.info("=== Initializing PeakNetPipelineActor ===")
 
@@ -156,6 +159,11 @@ class PeakNetPipelineActorBase:
             self.output_shape = input_shape
             logging.info(f"No-op mode: input_shape={self.input_shape}, output_shape={self.output_shape}")
 
+        # Create autocast context for mixed precision inference
+        device_str = f'cuda:{self.gpu_id}'
+        autocast_context = create_autocast_context(device_str, precision_dtype)
+        logging.info(f"Created autocast context: dtype={precision_dtype}")
+
         # Create double buffered pipeline - use the same GPU device as assigned to this actor
         pipeline_gpu_id = self.gpu_id
 
@@ -165,7 +173,8 @@ class PeakNetPipelineActorBase:
             input_shape=self.input_shape,
             output_shape=self.output_shape,
             gpu_id=pipeline_gpu_id,
-            pin_memory=pin_memory
+            pin_memory=pin_memory,
+            autocast_context=autocast_context
         )
 
         # Initialize statistics

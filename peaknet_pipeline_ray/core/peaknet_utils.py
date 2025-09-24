@@ -11,6 +11,7 @@ from torch import nn
 import os
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
+from contextlib import nullcontext
 
 # PeakNet imports
 try:
@@ -27,6 +28,38 @@ except ImportError:
     print("Warning: PeakNet not available. Make sure peaknet is installed and accessible")
 
 
+def create_autocast_context(device: str, precision_dtype: str):
+    """
+    Create autocast context for mixed precision inference.
+    Follows the same pattern as train_convnext_seg.py.
+
+    Args:
+        device: Device string (e.g., 'cuda:0', 'cpu')
+        precision_dtype: Precision type string ('float32', 'bfloat16', 'float16')
+
+    Returns:
+        Autocast context manager
+    """
+    # Map string dtype to torch dtype
+    dtype_mapping = {
+        'float32': torch.float32,
+        'bfloat16': torch.bfloat16,
+        'float16': torch.float16
+    }
+
+    if precision_dtype not in dtype_mapping:
+        raise ValueError(f"Unsupported precision dtype: {precision_dtype}. "
+                        f"Supported types: {list(dtype_mapping.keys())}")
+
+    mixed_precision_dtype = dtype_mapping[precision_dtype]
+
+    # Determine device type for autocast
+    device_type = 'cuda' if 'cuda' in device else 'cpu'
+
+    # Match training script logic exactly: nullcontext for CPU, autocast for CUDA
+    return nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=mixed_precision_dtype)
+
+
 class PeakNetForProfiling(nn.Module):
     """
     PeakNet wrapper optimized for profiling pipeline performance.
@@ -35,16 +68,18 @@ class PeakNetForProfiling(nn.Module):
     pipeline and optimize for profiling different memory transfer patterns.
     """
 
-    def __init__(self, peaknet_model: nn.Module, num_classes: int = 2):
+    def __init__(self, peaknet_model: nn.Module, num_classes: int = 2, autocast_context=None):
         """
         Initialize wrapper around PeakNet model.
 
         Args:
             peaknet_model: Initialized PeakNet model
             num_classes: Number of classes (default: 2 for peak/background)
+            autocast_context: Mixed precision context for inference
         """
         super().__init__()
         self.peaknet_model = peaknet_model
+        self.autocast_context = autocast_context
         # Get num_classes from PeakNet model config (correct access path)
         try:
             if hasattr(peaknet_model, 'config') and hasattr(peaknet_model.config, 'seg_head'):
@@ -77,8 +112,10 @@ class PeakNetForProfiling(nn.Module):
         Returns:
             Segmentation output of shape [batch_size, num_classes, height, width]
         """
-        # Run PeakNet inference
-        output = self.peaknet_model(x)
+        # Run PeakNet inference with mixed precision context
+        autocast_ctx = self.autocast_context if self.autocast_context is not None else nullcontext()
+        with autocast_ctx:
+            output = self.peaknet_model(x)
         return output
 
     def eval(self):

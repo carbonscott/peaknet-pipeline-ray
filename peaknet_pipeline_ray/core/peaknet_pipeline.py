@@ -18,6 +18,7 @@ import torch.cuda.nvtx as nvtx
 import time
 import hydra
 from omegaconf import DictConfig
+from contextlib import nullcontext
 import numpy as np
 import psutil
 import sys
@@ -195,13 +196,14 @@ class DoubleBufferedPipeline:
     Internal methods are private to encourage proper encapsulation.
     """
 
-    def __init__(self, model, batch_size, input_shape, output_shape, gpu_id, pin_memory=True):
+    def __init__(self, model, batch_size, input_shape, output_shape, gpu_id, pin_memory=True, autocast_context=None):
         self.model = model
         self.batch_size = batch_size
         self.input_shape = input_shape
         self.output_shape = output_shape
         self.gpu_id = gpu_id
         self.pin_memory = pin_memory
+        self.autocast_context = autocast_context
 
 
         # Check if model is None (no-op mode)
@@ -338,7 +340,10 @@ class DoubleBufferedPipeline:
                                 gpu_mem_before = torch.cuda.memory_allocated(input_device) / (1024**3)
                                 print(f"[DEBUG] GPU memory before inference: {gpu_mem_before:.2f} GB")
 
-                            predictions = self.model(valid_input_slice)
+                            # Use autocast context for mixed precision inference
+                            autocast_ctx = self.autocast_context if self.autocast_context is not None else nullcontext()
+                            with autocast_ctx:
+                                predictions = self.model(valid_input_slice)
 
                             # Verify output is on GPU
                             output_device = predictions.device

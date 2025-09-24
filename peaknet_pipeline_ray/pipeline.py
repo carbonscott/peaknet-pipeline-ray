@@ -576,6 +576,8 @@ class PeakNetPipeline:
                 warmup_samples=self.config.model.warmup_samples,
                 deterministic=True,
                 pin_memory=self.config.system.pin_memory,
+                # Mixed precision configuration
+                precision_dtype=self.config.precision.dtype,
             )
 
             if not self.config.output.quiet:
