@@ -979,22 +979,33 @@ class PeakNetPipeline:
         runtime = self.config.runtime
         data = self.config.data
 
-        if runtime.total_samples is not None:
-            total_batches_needed = (runtime.total_samples + runtime.batch_size - 1) // runtime.batch_size
-            batches_per_producer = max(1, total_batches_needed // runtime.num_producers)
-            if total_batches_needed > runtime.num_producers * batches_per_producer:
-                batches_per_producer += 1
+        # For socket sources, ignore total_samples and stream indefinitely
+        if self.config.data_source.source_type == "socket":
+            batches_per_producer = None  # Stream until socket closes
+            total_expected_batches = None  # Unknown for streaming
+            total_expected_samples = None  # Unknown for streaming
         else:
-            batches_per_producer = runtime.batches_per_producer
+            # Calculate finite batches for non-socket sources
+            if runtime.total_samples is not None:
+                total_batches_needed = (runtime.total_samples + runtime.batch_size - 1) // runtime.batch_size
+                batches_per_producer = max(1, total_batches_needed // runtime.num_producers)
+                if total_batches_needed > runtime.num_producers * batches_per_producer:
+                    batches_per_producer += 1
+            else:
+                batches_per_producer = runtime.batches_per_producer
 
-        total_expected_batches = runtime.num_producers * batches_per_producer
-        total_expected_samples = total_expected_batches * runtime.batch_size
+            total_expected_batches = runtime.num_producers * batches_per_producer
+            total_expected_samples = total_expected_batches * runtime.batch_size
 
         if not self.config.output.quiet:
             print(f"   Producers: {runtime.num_producers}")
-            print(f"   Actors: {len(actors)}")  
-            print(f"   Batches per producer: {batches_per_producer}")
-            print(f"   Expected total: {total_expected_batches} batches, {total_expected_samples} samples")
+            print(f"   Actors: {len(actors)}")
+            if self.config.data_source.source_type == "socket":
+                print(f"   Batches per producer: unlimited (stream until socket closes)")
+                print(f"   Expected total: unknown (continuous streaming)")
+            else:
+                print(f"   Batches per producer: {batches_per_producer}")
+                print(f"   Expected total: {total_expected_batches} batches, {total_expected_samples} samples")
             print(f"   Input shape: {data.shape}")
             print(f"   Inter-batch delay: {runtime.inter_batch_delay}s")
 
@@ -1047,12 +1058,12 @@ class PeakNetPipeline:
         for i, producer in enumerate(producers):
             # Use appropriate method based on producer type
             if self.config.data_source.source_type == "socket":
-                # Lightweight socket producers use different method name
+                # Socket producers stream indefinitely (batches_per_producer is None)
                 task = producer.stream_raw_bytes_to_queue.remote(
                     q1_manager,
-                    batches_per_producer,
+                    batches_per_producer,  # None for socket sources
                     coordinator,
-                    progress_interval=max(10, batches_per_producer // 10)
+                    progress_interval=100  # Fixed interval for socket streaming
                 )
             else:
                 # Standard producers (random data, etc.)
@@ -1153,7 +1164,7 @@ class PeakNetPipeline:
             'actor_results': actor_results,
             'actor_stats': actor_stats,
             'expected_samples': total_expected_samples,
-            'sample_completion_rate': total_processed_samples / total_expected_samples if total_expected_samples > 0 else 0,
+            'sample_completion_rate': total_processed_samples / total_expected_samples if total_expected_samples and total_expected_samples > 0 else 0,
             'queue_config': {
                 'q1_shards': num_shards,
                 'q1_maxsize_per_shard': maxsize_per_shard,
@@ -1212,8 +1223,15 @@ class PeakNetPipeline:
         print(f"🌊 Streaming Performance:")
         print(f"   Total samples processed: {performance['total_samples']:,}")
         print(f"   Total batches processed: {performance['total_batches']:,}")
-        print(f"   Expected samples: {performance['expected_samples']:,}")
-        print(f"   Completion rate: {performance['sample_completion_rate']:.1%}")
+
+        expected_samples = performance['expected_samples']
+        if expected_samples is not None:
+            print(f"   Expected samples: {expected_samples:,}")
+            print(f"   Completion rate: {performance['sample_completion_rate']:.1%}")
+        else:
+            print(f"   Expected samples: unlimited (continuous streaming)")
+            print(f"   Completion rate: N/A (continuous streaming)")
+
         print(f"   Total time: {performance['total_processing_time']:.2f}s")
         print(f"   Overall throughput: {performance['overall_throughput']:.1f} samples/s")
 

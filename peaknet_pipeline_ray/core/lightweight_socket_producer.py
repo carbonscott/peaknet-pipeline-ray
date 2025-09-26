@@ -184,7 +184,7 @@ class LightweightSocketProducer:
     def stream_raw_bytes_to_queue(
         self,
         queue_manager: ShardedQueueManager,
-        total_batches: int,
+        total_batches: Optional[int],
         coordinator: ray.ObjectRef,
         progress_interval: int = 10
     ) -> Dict[str, Any]:
@@ -196,7 +196,7 @@ class LightweightSocketProducer:
 
         Args:
             queue_manager: Pipeline input queue manager
-            total_batches: Maximum number of batches to produce
+            total_batches: Maximum number of batches to produce (None = stream indefinitely)
             coordinator: Pipeline coordinator for shutdown signaling
             progress_interval: Log progress every N batches
 
@@ -214,12 +214,14 @@ class LightweightSocketProducer:
         start_time = time.time()
 
         try:
-            while self.batch_counter < total_batches:
+            # Stream until total_batches reached (finite) or indefinitely (None)
+            while total_batches is None or self.batch_counter < total_batches:
                 # STEP 1: Receive raw bytes (only blocking operation)
                 raw_bytes = self._receive_raw_bytes()
                 if raw_bytes is None:
-                    logging.error(f"Producer {self.producer_id}: Socket connection lost, aborting")
-                    return self._get_final_stats(success=False, error="Socket connection lost")
+                    # Socket timeout or connection lost - normal termination for streaming
+                    logging.info(f"Producer {self.producer_id}: Socket closed/timeout, streaming completed normally")
+                    break
 
                 # STEP 2: Create minimal wrapper (ultra-fast)
                 raw_data = self._create_raw_socket_data(raw_bytes)
@@ -237,10 +239,16 @@ class LightweightSocketProducer:
                 if self.batch_counter % progress_interval == 0:
                     elapsed = time.time() - start_time
                     bytes_per_sec = self.stats.bytes_received / elapsed if elapsed > 0 else 0
-                    logging.info(
-                        f"Producer {self.producer_id}: {self.batch_counter}/{total_batches} batches, "
-                        f"{bytes_per_sec/1024/1024:.1f} MB/s, {self.stats.packets_received} packets"
-                    )
+                    if total_batches is not None:
+                        logging.info(
+                            f"Producer {self.producer_id}: {self.batch_counter}/{total_batches} batches, "
+                            f"{bytes_per_sec/1024/1024:.1f} MB/s, {self.stats.packets_received} packets"
+                        )
+                    else:
+                        logging.info(
+                            f"Producer {self.producer_id}: {self.batch_counter} batches (streaming), "
+                            f"{bytes_per_sec/1024/1024:.1f} MB/s, {self.stats.packets_received} packets"
+                        )
 
         except KeyboardInterrupt:
             logging.info(f"Producer {self.producer_id}: Interrupted by user")
