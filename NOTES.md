@@ -1,1 +1,0 @@
-`CUDA_VISIBLE_DEVICES=0,1 peaknet-pipeline --config /sdf/data/lcls/ds/prj/prjcwang31/results/proj-stream-to-ml/peaknet-random.yaml --max-actors 1 --total-samples 160 --verbose --compile-mode reduce-overhead`
