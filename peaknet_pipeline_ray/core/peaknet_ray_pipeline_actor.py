@@ -192,8 +192,8 @@ class PeakNetPipelineActorBase:
             }
         }
 
-        # Model warmup if requested
-        if warmup_iterations > 0 and self.peaknet_model is not None:
+        # Model warmup if requested (only when using torch.compile)
+        if warmup_iterations > 0 and self.peaknet_model is not None and compile_mode is not None:
             logging.info(f"Running model warmup with {warmup_iterations} iterations...")
             self._run_warmup(warmup_iterations, self.input_shape)
             self.warmup_completed = True

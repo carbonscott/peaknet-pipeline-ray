@@ -509,8 +509,8 @@ def run_pipeline_test(
         pin_memory=pin_memory
     )
 
-    # Warmup phase
-    if not skip_warmup and warmup_iterations > 0:
+    # Warmup phase (only when using torch.compile)
+    if not skip_warmup and warmup_iterations > 0 and compile_mode is not None:
         print(f"Warmup phase: {warmup_iterations} iterations ({warmup_samples} samples)...")
         _run_double_buffer_pipeline(
             pipeline, cpu_tensors[:warmup_samples], batch_size, "warmup", sync_frequency, is_warmup=True
