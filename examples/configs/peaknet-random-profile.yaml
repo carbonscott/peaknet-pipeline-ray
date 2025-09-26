@@ -1,0 +1,84 @@
+# PeakNet Pipeline Configuration for Random Data Generation
+# Test configuration for synthetic data generation (not streaming)
+
+model:
+  weights_path: null  # No weights = randomly initialized model (but REAL GPU computation!)
+
+  # Simplified PeakNet configuration - no complex nested structures
+  peaknet_config:
+    model:
+      # Basic model parameters
+      image_size: 512
+      num_channels: 1
+      num_classes: 2
+
+      # Backbone configuration
+      backbone_hidden_sizes: [96, 192, 384, 768]
+      backbone_depths: [3, 3, 9, 3]
+
+      # BiFPN configuration
+      bifpn_num_blocks: 2
+      bifpn_num_features: 256
+
+      # Segmentation head configuration
+      seg_out_channels: 256
+
+      # Other settings
+      from_scratch: false
+  warmup_iterations: 100  # 100 iterations for torch.compile warmup
+
+runtime:
+  max_actors: 4           # Multi-GPU profiling
+  batch_size: 16          # Reasonable for large images
+  num_producers: 2        # Multiple producers for parallel random data generation
+  batches_per_producer: 32 # Batches per producer - total batches = num_producers * batches_per_producer
+  total_samples: 1600    # Total samples to generate (overrides batches_per_producer calculation if set)
+  inter_batch_delay: 0.01 # Moderate streaming rate
+  queue_num_shards: 4
+  queue_maxsize_per_shard: 2000
+
+data:
+  shape: [1, 512, 512]  # Full resolution as requested (channels inferred from shape[0])
+
+# Note: No transforms section - preprocessing removed from pipeline for performance
+# Random data generation creates data already in the correct (B, C, H, W) format
+
+# Data source configuration for random data generation
+data_source:
+  source_type: random     # Generate synthetic random data (not from socket)
+
+# NEW: Mixed precision configuration for inference performance
+precision:
+  dtype: "float32"         # Precision type: "float32", "bfloat16", "float16"
+                            # Autocast is automatically used for CUDA devices with bfloat16/float16
+system:
+  min_gpus: 1             # Minimum GPUs required
+  skip_gpu_validation: false
+  pin_memory: true        # Better GPU transfer performance
+  verify_actors: false     # Verify GPU health
+
+profiling:
+  enable_profiling: true # Disable for initial testing
+  output_dir: "./profiling_results"
+
+output:
+  output_dir: "./test_results"
+  verbose: true           # Detailed output for analysis
+  quiet: false
+
+# Usage Examples:
+#
+# 1. Basic random data generation:
+#    peaknet-pipeline --config /sdf/data/lcls/ds/prj/prjcwang31/results/proj-stream-to-ml/peaknet-random.yaml
+#
+# 2. Override total samples:
+#    peaknet-pipeline --config peaknet-random.yaml --total-samples 1024
+#
+# 3. Scale up for performance testing:
+#    peaknet-pipeline --config peaknet-random.yaml --max-actors 8 --total-samples 20480
+#
+# Key Parameters for Random Mode:
+# - num_producers: Number of parallel random data generators (8 recommended)
+# - batches_per_producer: Batches each producer generates
+# - total_samples: Override for exact sample count (ignores batches_per_producer)
+# - inter_batch_delay: Artificial delay to simulate realistic data rates

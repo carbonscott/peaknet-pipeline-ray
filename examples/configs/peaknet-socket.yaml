@@ -1,0 +1,110 @@
+# PeakNet Pipeline Configuration with Socket Data Source
+# Configuration for continuous streaming from LCLStreamer
+#
+# PROCESSING MODES:
+# - Continuous (total_samples: null): Process data until socket timeout or Ctrl+C
+# - Finite (total_samples: N): Process exactly N samples then stop
+
+model:
+  weights_path: null  # No weights = randomly initialized model (but REAL GPU computation!)
+
+  # Simplified PeakNet configuration - no complex nested structures
+  peaknet_config:
+    model:
+      # Basic model parameters
+      image_size: 1920
+      num_channels: 1
+      num_classes: 2
+
+      # Backbone configuration
+      backbone_hidden_sizes: [96, 192, 384, 768]
+      backbone_depths: [3, 3, 9, 3]
+
+      # BiFPN configuration
+      bifpn_num_blocks: 2
+      bifpn_num_features: 256
+
+      # Segmentation head configuration
+      seg_out_channels: 256
+
+      # Other settings
+      from_scratch: false
+  warmup_iterations: 50
+
+runtime:
+  max_actors: 4           # Multi-GPU profiling
+  batch_size: 16          # Reasonable for large images
+  num_producers: 1        # Single socket producer (typically one socket stream)
+  total_samples: null     # null = continuous processing until stream ends (recommended for socket sources)
+                          # Set to positive integer for finite processing (e.g., 20480 for testing)
+  inter_batch_delay: 0.01 # Moderate streaming rate
+  queue_num_shards: 8
+  queue_maxsize_per_shard: 1600
+  # Coordination timing to eliminate pipeline gaps
+  max_empty_polls: 500    # Wait longer before coordinator check (reduces gaps)
+  poll_timeout: 0.001     # Faster polling for responsiveness (1ms)
+
+data:
+  shape: [1, 1920, 1920]  # Full resolution as requested (channels inferred from shape[0])
+
+# Transforms removed - preprocessing handled by producer before socket transmission
+
+# Data source configuration for socket streaming
+data_source:
+  source_type: socket     # "socket" = stream from LCLStreamer, "random" = generate synthetic data
+
+  # Socket connection settings
+  socket_hostname: sdfada001  # Change to actual hostname (e.g., sdfada015)
+  socket_port: 12321          # Default LCLStreamer port
+  socket_timeout: 300.0        # Socket timeout: wait this long for data before assuming stream ended
+  socket_retry_attempts: 5    # Number of connection retry attempts
+
+  # HDF5 field mapping (must match LCLStreamer configuration)
+  fields:
+    detector_data: "/data/data"           # Main image data from detector
+    timestamp: "/data/timestamp"          # Event timestamp
+    photon_wavelength: "/data/wavelength" # Photon wavelength/energy
+    random: "/data/random"                # Random array (if included by LCLStreamer)
+
+  # Direct batch pass-through: trust pusher to provide appropriately sized batches
+  batch_assembly: false       # Disable artificial batch assembly - use pusher's batches directly
+  # batch_timeout: removed    # No timeout needed with direct pass-through
+
+  # Required fields for validation
+  required_fields: ["detector_data"]  # Fields that must be present in each HDF5 message
+
+# NEW: Mixed precision configuration for inference performance
+precision:
+  dtype: "bfloat16"         # Precision type: "float32", "bfloat16", "float16"
+                            # Autocast is automatically used for CUDA devices with bfloat16/float16
+
+system:
+  min_gpus: 1             # Minimum GPUs required
+  skip_gpu_validation: false
+  pin_memory: true        # Better GPU transfer performance
+  verify_actors: false     # Verify GPU health
+
+profiling:
+  enable_profiling: true # Disable for initial testing
+  output_dir: "./profiling_results"
+
+output:
+  output_dir: "./test_results"
+  verbose: true           # Detailed output for analysis
+  quiet: false
+
+# Additional notes:
+# 1. To use random data source instead of socket, set data_source.source_type to "random"
+# 2. The socket_hostname should match the machine running LCLStreamer
+# 3. The fields mapping should exactly match the LCLStreamer configuration
+# 4. For testing, you can reduce total_samples to get faster feedback
+#
+# WARMUP BEHAVIOR:
+# 5. Pipeline uses data.shape for immediate warmup, then waits for socket data
+# 6. The pipeline will BLOCK until actual socket data arrives (no infinite retry warnings)
+#
+# Example usage:
+# peaknet-pipeline --config /sdf/data/lcls/ds/prj/prjcwang31/results/proj-stream-to-ml/peaknet.yaml --verbose
+#
+# Or override from command line:
+# peaknet-pipeline --config peaknet.yaml --data-source socket --socket-hostname sdfada015 --verbose
