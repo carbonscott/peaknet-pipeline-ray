@@ -195,7 +195,7 @@ class PeakNetPipelineActorBase:
         # Model warmup if requested
         if warmup_iterations > 0 and self.peaknet_model is not None:
             logging.info(f"Running model warmup with {warmup_iterations} iterations...")
-            self._run_warmup(warmup_iterations, input_shape)
+            self._run_warmup(warmup_iterations, self.input_shape)
             self.warmup_completed = True
 
         logging.info(f"✅ PeakNetPipelineActor initialized successfully on GPU {self.gpu_id}")
