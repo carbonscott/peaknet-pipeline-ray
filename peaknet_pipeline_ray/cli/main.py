@@ -49,9 +49,9 @@ def create_parser() -> argparse.ArgumentParser:
         help='PyTorch compilation mode (None = no compilation, default: None)'
     )
     model_group.add_argument(
-        '--warmup-samples',
+        '--warmup-iterations',
         type=int,
-        help='Number of warmup samples (0 = skip warmup, default: 500)'
+        help='Number of warmup iterations (0 = skip warmup, default: 50)'
     )
 
     # Runtime configuration
@@ -243,8 +243,8 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config.model.weights_path = args.model_weights_path
     if args.compile_mode is not None:
         config.model.compile_mode = args.compile_mode
-    if args.warmup_samples is not None:
-        config.model.warmup_samples = args.warmup_samples
+    if args.warmup_iterations is not None:
+        config.model.warmup_iterations = args.warmup_iterations
 
     if args.max_actors is not None:
         config.runtime.max_actors = args.max_actors

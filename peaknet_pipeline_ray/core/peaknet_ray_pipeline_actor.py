@@ -45,7 +45,7 @@ class PeakNetPipelineActorBase:
         weights_path: str = None,
         pin_memory: bool = True,
         compile_mode: Optional[str] = None,
-        warmup_samples: int = 500,
+        warmup_iterations: int = 50,
         deterministic: bool = False,
         gpu_id: int = None,
         precision_dtype: str = "float32",
@@ -60,7 +60,7 @@ class PeakNetPipelineActorBase:
             weights_path: Path to PeakNet model weights
             pin_memory: Use pinned memory
             compile_mode: Torch compile mode (None = no compilation)
-            warmup_samples: Number of warmup samples (0 = skip warmup)
+            warmup_iterations: Number of warmup iterations (0 = skip warmup)
             deterministic: Use deterministic operations
             gpu_id: Explicit GPU ID to use (None for Ray auto-assignment)
             precision_dtype: Precision type for mixed precision ('float32', 'bfloat16', 'float16')
@@ -117,7 +117,7 @@ class PeakNetPipelineActorBase:
         self.peaknet_config = peaknet_config
         self.weights_path = weights_path
         self.warmup_completed = False
-        self.configured_warmup_samples = warmup_samples
+        self.configured_warmup_iterations = warmup_iterations
         self.pin_memory = pin_memory
         self.deterministic = deterministic
 
@@ -193,13 +193,13 @@ class PeakNetPipelineActorBase:
         }
 
         # Model warmup if requested
-        if warmup_samples > 0 and self.peaknet_model is not None:
-            logging.info(f"Running model warmup with {warmup_samples} samples...")
-            self._run_warmup(warmup_samples, input_shape)
+        if warmup_iterations > 0 and self.peaknet_model is not None:
+            logging.info(f"Running model warmup with {warmup_iterations} iterations...")
+            self._run_warmup(warmup_iterations, input_shape)
             self.warmup_completed = True
 
         logging.info(f"✅ PeakNetPipelineActor initialized successfully on GPU {self.gpu_id}")
-        logging.info(f"Model: peaknet_config={peaknet_config is not None}, compile_mode={compile_mode}, warmup_samples={warmup_samples}")
+        logging.info(f"Model: peaknet_config={peaknet_config is not None}, compile_mode={compile_mode}, warmup_iterations={warmup_iterations}")
         logging.info(f"Shapes: input_shape={self.input_shape}, output_shape={self.output_shape}")
 
 
@@ -603,45 +603,37 @@ class PeakNetPipelineActorBase:
             fallback_tensor = torch.zeros(self.input_shape, dtype=torch.float32)
             return [fallback_tensor]
 
-    def _run_warmup(self, warmup_samples: int, input_shape: Tuple[int, int, int]) -> None:
+    def _run_warmup(self, warmup_iterations: int, input_shape: Tuple[int, int, int]) -> None:
         """Run model warmup with synthetic data.
-        
+
         Args:
-            warmup_samples: Number of warmup samples to process
+            warmup_iterations: Number of warmup iterations to process
             input_shape: Shape of input tensors (C, H, W)
         """
         try:
             import torch
-            
+
             # Generate synthetic warmup data using provided shape
-            warmup_batch_size = min(self.batch_size, warmup_samples)
-            warmup_tensor = torch.randn(warmup_batch_size, *input_shape, dtype=torch.float32)
-            warmup_tensors = [warmup_tensor[i] for i in range(warmup_batch_size)]
-            
-            # Calculate number of warmup batches needed
-            num_warmup_batches = (warmup_samples + warmup_batch_size - 1) // warmup_batch_size
-            
-            logging.info(f"Warmup: Processing {num_warmup_batches} batches of size {warmup_batch_size}")
-            
-            for batch_idx in range(num_warmup_batches):
-                # Adjust batch size for last batch if needed
-                current_batch_size = min(warmup_batch_size, warmup_samples - batch_idx * warmup_batch_size)
-                current_tensors = warmup_tensors[:current_batch_size]
-                
+            warmup_tensor = torch.randn(self.batch_size, *input_shape, dtype=torch.float32)
+            warmup_tensors = [warmup_tensor[i] for i in range(self.batch_size)]
+
+            logging.info(f"Warmup: Processing {warmup_iterations} iterations of batch size {self.batch_size}")
+
+            for batch_idx in range(warmup_iterations):
                 # Process batch through pipeline (similar to regular processing)
                 if batch_idx > 0:
                     self.pipeline.swap()  # No sync during warmup for performance
-                
+
                 self.pipeline.process_batch(
-                    cpu_batch=current_tensors,
+                    cpu_batch=warmup_tensors,
                     batch_idx=batch_idx,
-                    current_batch_size=current_batch_size,
+                    current_batch_size=self.batch_size,
                     nvtx_prefix=f"warmup_actor_{self.gpu_id}"
                 )
-            
+
             # Final sync to ensure all warmup work completes
             self.pipeline.wait_for_completion()
-            logging.info(f"Warmup completed: {warmup_samples} samples processed")
+            logging.info(f"Warmup completed: {warmup_iterations} iterations processed")
             
         except Exception as e:
             logging.warning(f"Warmup failed: {e}, continuing without warmup")

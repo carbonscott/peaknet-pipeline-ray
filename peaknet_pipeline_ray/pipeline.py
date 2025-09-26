@@ -573,7 +573,7 @@ class PeakNetPipeline:
                 weights_path=self.config.model.weights_path,
                 peaknet_config=self.config.model.peaknet_config,
                 compile_mode=self.config.model.compile_mode,
-                warmup_samples=self.config.model.warmup_samples,
+                warmup_iterations=self.config.model.warmup_iterations,
                 deterministic=True,
                 pin_memory=self.config.system.pin_memory,
                 # Mixed precision configuration

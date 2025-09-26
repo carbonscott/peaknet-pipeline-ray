@@ -13,7 +13,7 @@ class ModelConfig:
     weights_path: Optional[str] = None
     peaknet_config: Optional[Dict[str, Any]] = None
     compile_mode: Optional[str] = None  # None/"default"/"reduce-overhead"/"max-autotune"
-    warmup_samples: int = 500  # 0 = skip warmup
+    warmup_iterations: int = 50  # 0 = skip warmup
 
 
 @dataclass
@@ -168,7 +168,7 @@ class PipelineConfig:
                 'weights_path': self.model.weights_path,
                 'peaknet_config': self.model.peaknet_config,
                 'compile_mode': self.model.compile_mode,
-                'warmup_samples': self.model.warmup_samples
+                'warmup_iterations': self.model.warmup_iterations
             },
             'runtime': {
                 'max_actors': self.runtime.max_actors,

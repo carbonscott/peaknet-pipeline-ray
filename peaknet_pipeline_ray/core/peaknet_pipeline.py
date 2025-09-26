@@ -402,7 +402,7 @@ def run_pipeline_test(
     tensor_shape=(1, 512, 512),
     num_samples=1000,
     batch_size=10,
-    warmup_samples=100,
+    warmup_iterations=10,
     peaknet_config=None,
     weights_path=None,
     skip_warmup=False,
@@ -441,7 +441,7 @@ def run_pipeline_test(
     print(f"Tensor Shape: {tensor_shape}")
     print(f"Batch Size: {batch_size}")
     print(f"Total Samples: {num_samples}")
-    print(f"Warmup Samples: {warmup_samples if not skip_warmup else 0}")
+    print(f"Warmup Iterations: {warmup_iterations if not skip_warmup else 0}")
     print(f"PeakNet Config: peaknet_config={peaknet_config is not None}, weights_path={weights_path}")
     print(f"Pin Memory: {pin_memory}")
     print(f"Sync Frequency: {sync_frequency}")
@@ -464,14 +464,15 @@ def run_pipeline_test(
 
     # Increase warmup for aggressive compilation modes
     if compile_mode in ['reduce-overhead', 'max-autotune']:
-        original_warmup = warmup_samples
-        warmup_samples = max(warmup_samples, 1000)
-        if warmup_samples > original_warmup:
-            print(f"Increased warmup samples to {warmup_samples} for {compile_mode} compilation mode")
+        original_warmup = warmup_iterations
+        warmup_iterations = max(warmup_iterations, 100)
+        if warmup_iterations > original_warmup:
+            print(f"Increased warmup iterations to {warmup_iterations} for {compile_mode} compilation mode")
 
     # Pre-generate test data
     print("Pre-generating test data...")
-    total_samples = (0 if skip_warmup else warmup_samples) + num_samples
+    warmup_samples = 0 if skip_warmup else (warmup_iterations * batch_size)
+    total_samples = warmup_samples + num_samples
 
     cpu_tensors = []
     for i in range(total_samples):
@@ -509,8 +510,8 @@ def run_pipeline_test(
     )
 
     # Warmup phase
-    if not skip_warmup and warmup_samples > 0:
-        print(f"Warmup phase: {warmup_samples} samples...")
+    if not skip_warmup and warmup_iterations > 0:
+        print(f"Warmup phase: {warmup_iterations} iterations ({warmup_samples} samples)...")
         _run_double_buffer_pipeline(
             pipeline, cpu_tensors[:warmup_samples], batch_size, "warmup", sync_frequency, is_warmup=True
         )
@@ -582,7 +583,7 @@ def main(cfg: DictConfig) -> None:
         tensor_shape=tuple(cfg.shape),
         num_samples=cfg.num_samples,
         batch_size=cfg.batch_size,
-        warmup_samples=cfg.warmup_samples,
+        warmup_iterations=cfg.warmup_iterations,
         yaml_path=cfg.peaknet.yaml_path,
         weights_path=cfg.peaknet.weights_path,
         skip_warmup=cfg.test.skip_warmup,

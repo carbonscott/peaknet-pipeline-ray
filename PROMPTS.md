@@ -208,5 +208,5 @@ if I can directly specify it as int('inf'), which I know don't exists in python,
 but there should be something similar to it.  I would just do that.  So I don't
 need to change anything in the code and it will process until all streamed-in
 data are consumed.  (I suppose the coordinate will be able to terminate the
-pipeline).  Is my assessment fair?  think hard
+pipeline).  Is my assessment fair?  think hare
 

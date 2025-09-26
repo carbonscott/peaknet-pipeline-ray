@@ -42,19 +42,19 @@ peaknet-pipeline --config examples/configs/peaknet.yaml --compile-mode max-autot
 Compiled models benefit from warmup to avoid recompilation overhead during inference:
 
 ```bash
-# Default warmup (500 samples)
+# Default warmup (50 iterations)
 peaknet-pipeline --config examples/configs/peaknet.yaml --compile-mode default
 
-# Custom warmup samples
-peaknet-pipeline --config examples/configs/peaknet.yaml --compile-mode default --warmup-samples 1000
+# Custom warmup iterations
+peaknet-pipeline --config examples/configs/peaknet.yaml --compile-mode default --warmup-iterations 100
 
 # Skip warmup
-peaknet-pipeline --config examples/configs/peaknet.yaml --compile-mode default --warmup-samples 0
+peaknet-pipeline --config examples/configs/peaknet.yaml --compile-mode default --warmup-iterations 0
 ```
 
 ### Performance Recommendations
 - Use `reduce-overhead` mode for production workloads with consistent batch sizes
-- Allow sufficient warmup samples (500-1000) for stable compilation
+- Allow sufficient warmup iterations (50-100) for stable compilation
 - Monitor first-batch latency vs steady-state performance
 
 ## What it does
