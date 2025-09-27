@@ -38,6 +38,7 @@ runtime:
   total_samples: null     # null = continuous processing until stream ends (recommended for socket sources)
                           # Set to positive integer for finite processing (e.g., 20480 for testing)
   inter_batch_delay: 0.01 # Moderate streaming rate
+  memory_sync_interval: 100  # Sync every 100 batches for memory management (0=disable)
   queue_num_shards: 8
   queue_maxsize_per_shard: 1600
   # Coordination timing to eliminate pipeline gaps

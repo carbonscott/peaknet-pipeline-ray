@@ -1083,11 +1083,11 @@ class PeakNetPipeline:
         for i, actor in enumerate(actors):
             task = actor.process_from_queue.remote(
                 q1_manager,
+                runtime.memory_sync_interval,  # From config
                 q2_manager,
                 coordinator,
                 max_empty_polls=runtime.max_empty_polls,  # From config
-                poll_timeout=runtime.poll_timeout,   # From config
-                memory_sync_interval=200  # Sync every 200 batches for memory management
+                poll_timeout=runtime.poll_timeout   # From config
             )
             actor_tasks.append(task)
 

@@ -362,11 +362,11 @@ class PeakNetPipelineActorBase:
     def process_from_queue(
         self,
         q1_manager,
+        memory_sync_interval: int,
         q2_manager=None,
         coordinator=None,
         max_empty_polls: int = 10,
-        poll_timeout: float = 0.01,
-        memory_sync_interval: int = 100
+        poll_timeout: float = 0.01
     ) -> Dict[str, Any]:
         """
         TRUE STREAMING: Process data continuously from queue without batch accumulation.
@@ -377,11 +377,11 @@ class PeakNetPipelineActorBase:
 
         Args:
             q1_manager: Input queue manager to pull data from
+            memory_sync_interval: Sync every N batches for memory management
             q2_manager: Optional output queue manager to push results to
             coordinator: Optional coordinator for termination logic
             max_empty_polls: Check coordinator after N consecutive empty polls
             poll_timeout: Timeout for queue polling in seconds
-            memory_sync_interval: Sync every N batches for memory management
 
         Returns:
             Dictionary with processing statistics

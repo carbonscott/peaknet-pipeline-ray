@@ -57,6 +57,23 @@ peaknet-pipeline --config examples/configs/peaknet.yaml --compile-mode default -
 - Allow sufficient warmup iterations (50-100) for stable compilation
 - Monitor first-batch latency vs steady-state performance
 
+### Memory Management
+
+The pipeline performs periodic GPU memory synchronization to prevent memory leaks during long-running inference:
+
+```bash
+# Default: sync every 100 batches
+peaknet-pipeline --config config.yaml
+
+# Custom interval: sync every 500 batches
+peaknet-pipeline --config config.yaml --memory-sync-interval 500
+
+# Disable periodic sync (maximum performance, monitor memory usage)
+peaknet-pipeline --config config.yaml --memory-sync-interval 0
+```
+
+**Performance Impact:** Synchronization occurs very infrequently and has minimal impact on throughput.
+
 ## What it does
 
 - Runs PeakNet models (ConvNextV2 + BiFPN) 

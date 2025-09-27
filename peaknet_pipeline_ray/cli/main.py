@@ -87,6 +87,11 @@ def create_parser() -> argparse.ArgumentParser:
         help='Delay between batches in seconds'
     )
     runtime_group.add_argument(
+        '--memory-sync-interval',
+        type=int,
+        help='Sync every N batches for memory management (0=disable, default: 100)'
+    )
+    runtime_group.add_argument(
         '--queue-shards',
         type=int,
         help='Number of queue shards for parallel access'
@@ -258,6 +263,8 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         config.runtime.batches_per_producer = args.batches_per_producer
     if args.inter_batch_delay is not None:
         config.runtime.inter_batch_delay = args.inter_batch_delay
+    if args.memory_sync_interval is not None:
+        config.runtime.memory_sync_interval = args.memory_sync_interval
     if args.queue_shards is not None:
         config.runtime.queue_num_shards = args.queue_shards
     if args.queue_size_per_shard is not None:

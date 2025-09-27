@@ -25,6 +25,8 @@ class RuntimeConfig:
     num_producers: int = 4
     batches_per_producer: int = 5
     inter_batch_delay: float = 0.1
+    # Memory management configuration
+    memory_sync_interval: int = 100  # Sync every N batches for memory management (0=disable)
     # Queue configuration
     queue_num_shards: int = 4  # Number of queue shards for parallel access
     queue_maxsize_per_shard: int = 100  # Maximum items per shard (total capacity = shards * maxsize)
@@ -177,6 +179,7 @@ class PipelineConfig:
                 'num_producers': self.runtime.num_producers,
                 'batches_per_producer': self.runtime.batches_per_producer,
                 'inter_batch_delay': self.runtime.inter_batch_delay,
+                'memory_sync_interval': self.runtime.memory_sync_interval,
                 'queue_num_shards': self.runtime.queue_num_shards,
                 'queue_maxsize_per_shard': self.runtime.queue_maxsize_per_shard,
                 'max_empty_polls': self.runtime.max_empty_polls,

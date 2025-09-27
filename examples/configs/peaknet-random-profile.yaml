@@ -34,6 +34,7 @@ runtime:
   batches_per_producer: 32 # Batches per producer - total batches = num_producers * batches_per_producer
   total_samples: 1600    # Total samples to generate (overrides batches_per_producer calculation if set)
   inter_batch_delay: 0.01 # Moderate streaming rate
+  memory_sync_interval: 100  # Sync every 100 batches for memory management (0=disable)
   queue_num_shards: 4
   queue_maxsize_per_shard: 2000
 
