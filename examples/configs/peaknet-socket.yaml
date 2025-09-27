@@ -61,6 +61,7 @@ data_source:
   socket_retry_attempts: 5    # Number of connection retry attempts
 
   # HDF5 field mapping (must match LCLStreamer configuration)
+  # NOTE: HDF5 parsing now occurs in the producer stage (not GPU actors) for better performance
   fields:
     detector_data: "/data/data"           # Main image data from detector
     timestamp: "/data/timestamp"          # Event timestamp
