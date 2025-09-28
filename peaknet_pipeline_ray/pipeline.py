@@ -1183,16 +1183,19 @@ class PeakNetPipeline:
             List of producer actors
         """
         if self.config.data_source.source_type == "socket":
-            # Create lightweight socket producers for optimal CPU/GPU overlap
-            from .core.lightweight_socket_producer import create_lightweight_socket_producers
+            # Create multi-threaded socket producers for high-performance data ingestion
+            from .core.multithreaded_socket_producer import create_multithreaded_socket_producers
 
             if not self.config.output.quiet:
                 print(f"   Socket: {self.config.data_source.socket_hostname}:{self.config.data_source.socket_port}")
-                print(f"   Optimization: Raw bytes → Pipeline parsing for zero gaps")
+                print(f"   Architecture: [Socket Thread] → [Raw Buffer] → [{self.config.data_source.internal_parser_threads} Parser Threads] → [Queue]")
+                print(f"   Performance: ~{self.config.data_source.internal_parser_threads}x parsing parallelism for GPU starvation elimination")
 
-            return create_lightweight_socket_producers(
+            return create_multithreaded_socket_producers(
                 num_producers=runtime.num_producers,
                 config=self.config.data_source,
+                internal_parser_threads=self.config.data_source.internal_parser_threads,
+                raw_buffer_size=self.config.data_source.raw_buffer_size,
                 deterministic=False
             )
         else:

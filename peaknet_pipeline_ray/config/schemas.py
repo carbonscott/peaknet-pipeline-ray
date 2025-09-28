@@ -71,6 +71,10 @@ class DataSourceConfig:
     # Required fields for validation
     required_fields: list = field(default_factory=lambda: ["detector_data"])
 
+    # Multi-threaded socket producer configuration (for performance optimization)
+    internal_parser_threads: int = 4  # Number of parallel HDF5 parser threads
+    raw_buffer_size: int = 100  # Size of raw bytes buffer between receiver and parsers
+
 
 
 

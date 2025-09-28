@@ -73,7 +73,11 @@ data_source:
   # batch_timeout: removed    # No timeout needed with direct pass-through
 
   # Required fields for validation
-  required_fields: ["detector_data"]  # Fields that must be present in each HDF5 message
+  required_fields: ["detector_data"]
+
+  # Multi-threaded socket producer configuration (for performance optimization)
+  internal_parser_threads: 8  # Number of parallel HDF5 parser threads (increased for better GPU feeding)
+  raw_buffer_size: 200         # Size of raw bytes buffer between receiver and parsers (increased for burst handling)  # Fields that must be present in each HDF5 message
 
 # NEW: Mixed precision configuration for inference performance
 precision:
