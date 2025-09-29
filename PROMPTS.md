@@ -274,6 +274,104 @@ hard
 
 ---
 
-I see warmup is performed even when torch compile is not in use.  Let's fix it
-now.
+I see warmup is performed even when torch compile is not in use.  Let's fix it now.
 
+---
+
+Fundamentally, where data source is random or socket, my double buffered inference pipeline
+implemntation and execution is the same, right?  I saw profiling results like
+`socket-profile.png` in socket mode.  I don't think there is explicit host device
+synchronization.  Is it a sign of input data starving?  If so, do you think it's
+the data producer (in lclstreamer)'s issue, or issues in Q1 to P stage? think hard
+
+---
+
+I saw a cudastreamsynchronize bewtween warmup and the actual inference on real
+data.  Could you investigate on why?  I thought there is supposed to be a host
+device synchronization, not cuda stream synchroniztion.  Maybe the cuda stream
+synchronization is built into pytorch's compile?  I don't know.  think hard
+
+---
+
+Could you investigate one detail?  Where does the hdf5 unpacking happen?  Is it
+from S to Q1, or is it from Q1 to P?  I suspect it's the latter.
+
+---
+
+There might be multiple solutions coded in the repo at once.  Which one was used
+in peaknet-pipeline (defined in setup.py)?  Then, track down hdf5 unpacking.
+think
+
+---
+
+Now, let's explore the option of moving the unpacking to "S to Q1".  I suspect
+the latency of unpacking hdf5 is not negligible.  think hard
+
+---
+
+Actually, before implementing a solution, please investigate another details.
+If the source_type is random (the producer might be streaming_producer), does
+the producer produces a HDF5 and then got unpacked during "Q1 to P"?  think
+
+---
+
+Does that mean the "Q1 to P" process can process two scenarios - (1) fetch HDF5
+from Ray's object store; (2) fetch PipelineInput object from Ray's object store?
+could you confirm?  think
+
+---
+
+Beautiful!  I guess it's not super hard to move HDF5 unpacking to "S to Q1",
+right?  You don't really need to modify the "Q1 to P" process since it is
+ready to process three data sources.  think hard
+
+---
+
+I am a bit concerned that the streaming data source idea might not be working at
+all.  When the model is being compiled, the GPU utilization is 100%.  But when
+the compilation is done, and actual data processing `S->Q1->P` seems to have
+almost 0% GPU utilization.  What might be going on?  Please investigate.  
+
+The command I was running is 
+
+```
+CUDA_VISIBLE_DEVICES=0,1 peaknet-pipeline --config peaknet-socket-profile.yaml --max-actors 2 --verbose  --compile-mode reduce-overhead
+```
+
+think hard
+
+---
+
+Is it possible that S gets one (C, H, W) image at a time instead of (B, C, H, W)
+as it does now.  I feel the 
+
+---
+
+I suspect we need many fetchers in `S to Q1` stage.  Could you investigate how
+many fetches we have right now?  What would happen if I increase `num_producers`
+to more than 1 like 10?  think hard
+
+---
+
+Please educate me on your new implementation.  why is raw_buffer_size needed?
+what is its relation with queue controlled by queue_num_shards.  
+
+---
+
+The GPU only gets occasionally busy when I use socket as the source type (in
+`$TEST_DIR/peaknet-socket-profile.yaml`), whereas it always gets busy when using
+random as the source type (`$TEST_DIR/peaknet-random-profile.yaml`).  Is HDF5
+itself the bottleneck (totally, my speculation).  Or are the pipelines 
+actually different?  think hard
+
+---
+
+I have been moving where to unpack HDF5 in the overarching pipeline (not just
+the ML double buffered inference pipeline, sorry for confusion) after commit
+`1767603621f1d7f9c5726345b497ace4179c7c49`.  I don't get much progress.  And,
+now I am suspecting it's actually because unpacking HDF5 itself is the
+bottleneck.  Now, I'm a bit concerns these changes are pre-mature.
+
+If I decide to do something on the producer side (lclstreamer), do you suggest I
+completely use the version at commit `1767603621f1d7f9c5726345b497ace4179c7c49`.
+What options do I have?
