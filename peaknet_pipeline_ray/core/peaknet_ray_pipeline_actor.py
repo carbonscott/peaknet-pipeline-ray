@@ -49,6 +49,8 @@ class PeakNetPipelineActorBase:
         deterministic: bool = False,
         gpu_id: int = None,
         precision_dtype: str = "float32",
+        serialization_format: str = "numpy",
+        fields: Dict[str, str] = None,
     ):
         """
         Initialize the pipeline actor.
@@ -64,6 +66,8 @@ class PeakNetPipelineActorBase:
             deterministic: Use deterministic operations
             gpu_id: Explicit GPU ID to use (None for Ray auto-assignment)
             precision_dtype: Precision type for mixed precision ('float32', 'bfloat16', 'float16')
+            serialization_format: Data serialization format ('numpy' or 'hdf5')
+            fields: Field mapping dictionary for data extraction
         """
         logging.info("=== Initializing PeakNetPipelineActor ===")
 
@@ -120,6 +124,8 @@ class PeakNetPipelineActorBase:
         self.configured_warmup_iterations = warmup_iterations
         self.pin_memory = pin_memory
         self.deterministic = deterministic
+        self.serialization_format = serialization_format
+        self.fields = fields or {"detector_data": "data"}
 
         # Get system info
         self.numa_info = get_numa_info()
@@ -557,15 +563,15 @@ class PeakNetPipelineActorBase:
         import numpy as np
 
         try:
-            # Determine serialization format from config
-            serialization_format = self.config.data_source.serialization_format
+            # Determine serialization format from actor configuration
+            serialization_format = self.serialization_format
 
             if serialization_format == "numpy":
                 # Fast NumPy .npz parsing (3-7x faster than HDF5)
                 arrays = np.load(BytesIO(raw_socket_data.raw_bytes))
 
-                # Extract detector data using field mapping from config
-                detector_data_key = self.config.data_source.fields.get("detector_data", "data")
+                # Extract detector data using field mapping from actor configuration
+                detector_data_key = self.fields.get("detector_data", "data")
 
                 if detector_data_key not in arrays.files:
                     raise ValueError(f"Detector data key '{detector_data_key}' not found in .npz. Available keys: {arrays.files}")
@@ -579,7 +585,7 @@ class PeakNetPipelineActorBase:
                 import hdf5plugin
 
                 with h5py.File(BytesIO(raw_socket_data.raw_bytes), 'r') as h5_file:
-                    detector_data_path = self.config.data_source.fields.get("detector_data", "/data/data")
+                    detector_data_path = self.fields.get("detector_data", "/data/data")
 
                     if detector_data_path in h5_file:
                         detector_data = h5_file[detector_data_path][:]
