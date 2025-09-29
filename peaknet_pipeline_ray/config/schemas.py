@@ -56,12 +56,17 @@ class DataSourceConfig:
     # Users must specify the expected data shape upfront for proper initialization
     shape: Tuple[int, int] = (1691, 1691)  # H, W - actual detector data size
 
-    # HDF5 field mapping (matches LCLStreamer format)
+    # Serialization format for socket data
+    serialization_format: str = "numpy"  # "numpy" for .npz format (fast), "hdf5" for legacy HDF5 format
+
+    # Field mapping (format depends on serialization_format)
+    # - NumPy format: flat keys like "data", "timestamp", "wavelength"
+    # - HDF5 format: hierarchical paths like "/data/data", "/data/timestamp"
     fields: Dict[str, str] = field(default_factory=lambda: {
-        "detector_data": "/data/data",
-        "timestamp": "/data/timestamp",
-        "photon_wavelength": "/data/wavelength",
-        "random": "/data/random"
+        "detector_data": "data",
+        "timestamp": "timestamp",
+        "photon_wavelength": "wavelength",
+        "random": "random"
     })
 
     # Batch assembly configuration
@@ -195,6 +200,7 @@ class PipelineConfig:
                 'socket_timeout': self.data_source.socket_timeout,
                 'socket_retry_attempts': self.data_source.socket_retry_attempts,
                 'shape': list(self.data_source.shape) if self.data_source.shape else None,
+                'serialization_format': self.data_source.serialization_format,
                 'fields': self.data_source.fields,
                 'batch_assembly': self.data_source.batch_assembly,
                 'batch_timeout': self.data_source.batch_timeout,
