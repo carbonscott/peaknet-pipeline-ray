@@ -774,9 +774,14 @@ class PeakNetPipelineActor(PeakNetPipelineActorBase):
     pass
 
 
-@ray.remote(num_gpus=1, runtime_env={"nsight": "default"})
+@ray.remote(num_gpus=1, runtime_env={"nsight": {
+    "t": "cuda,cudnn,cublas,nvtx,osrt",
+    "cuda-graph-trace": "node",
+    "cuda-memory-usage": "true",
+    "stop-on-exit": "true",
+}})
 class PeakNetPipelineActorWithProfiling(PeakNetPipelineActorBase):
-    """Ray actor for PeakNet pipeline processing with nsys profiling enabled."""
+    """Ray actor with enhanced nsys profiling for CUDA graphs."""
     pass
 
 

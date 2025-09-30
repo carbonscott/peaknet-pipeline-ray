@@ -601,3 +601,13 @@ investigate whether the current code already supports pulling data from multiple
 sockets - if so, thenit's a matter of having the right configuration file,
 right?  Let's use two sockets as a starter example.  `sdfada012:12321` and
 `sdfada012:12322`.
+
+---
+
+
+when I ran `CUDA_VISIBLE_DEVICES=0 peaknet-pipeline --config
+peaknet-random-profile.yaml --max-actors 1 --verbose --compile-mode
+reduce-overhead` under $TEST_DIR, I don't see any cuda graph generated.  The
+profiling results are in externals/no-graph.png.  CUDA HW exists, but seems to
+only capture a tiny bit of GPU activitites.  What's going on?  I'm sure the
+infernece ran after warmup.
