@@ -247,6 +247,11 @@ class PeakNetPipelineActorBase:
 
             logging.debug(f"Actor {self.gpu_id}: Processing batch {batch_id} with {actual_batch_size} tensors")
 
+            # Pin tensors for efficient H2D transfer
+            # Ray object store returns pageable memory which blocks CPU during H2D
+            if self.pin_memory and torch.cuda.is_available():
+                cpu_tensors = [t.pin_memory() if not t.is_pinned() else t for t in cpu_tensors]
+
             # Process through pipeline
             with nvtx.range(f"pipeline_process_{batch_id}"):
                 # Swap to next buffer (except for first batch)
@@ -457,6 +462,12 @@ class PeakNetPipelineActorBase:
                     cpu_tensors = ray.get(batch_data)
 
                 actual_batch_size = len(cpu_tensors)
+
+                # Pin tensors for efficient H2D transfer (Q1→P boundary optimization)
+                # Ray object store returns pageable memory which blocks CPU during H2D
+                # Pinning here allows true async transfer with GPU overlap
+                if self.pin_memory and torch.cuda.is_available():
+                    cpu_tensors = [t.pin_memory() if not t.is_pinned() else t for t in cpu_tensors]
 
                 # Process through pipeline - this starts async H2D/Compute/D2H
                 with nvtx.range(f"stream_process_batch_{processed_count}"):
