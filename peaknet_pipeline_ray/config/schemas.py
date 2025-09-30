@@ -59,6 +59,9 @@ class DataSourceConfig:
     # Serialization format for socket data
     serialization_format: str = "numpy"  # "numpy" for .npz format (fast), "hdf5" for legacy HDF5 format
 
+    # Parsing location for socket data
+    parse_location: str = "consumer"  # "producer" = parse in S→Q1 stage, "consumer" = parse in Q1→P stage (default)
+
     # Field mapping (format depends on serialization_format)
     # - NumPy format: flat keys like "data", "timestamp", "wavelength"
     # - HDF5 format: hierarchical paths like "/data/data", "/data/timestamp"
@@ -201,6 +204,7 @@ class PipelineConfig:
                 'socket_retry_attempts': self.data_source.socket_retry_attempts,
                 'shape': list(self.data_source.shape) if self.data_source.shape else None,
                 'serialization_format': self.data_source.serialization_format,
+                'parse_location': self.data_source.parse_location,
                 'fields': self.data_source.fields,
                 'batch_assembly': self.data_source.batch_assembly,
                 'batch_timeout': self.data_source.batch_timeout,

@@ -434,15 +434,26 @@ class PeakNetPipelineActorBase:
 
                 # Extract data from different sources
                 if hasattr(batch_data, 'raw_bytes'):
-                    # NEW: RawSocketData - parse HDF5 during GPU overlap
+                    # Consumer-side parsing (parse_location="consumer")
+                    # RawSocketData - parse during GPU overlap (Q1→P stage)
                     cpu_tensors = self._parse_raw_socket_data(batch_data)
                 elif hasattr(batch_data, 'get_torch_tensor'):
                     # PipelineInput object - get as individual tensors
                     batch_tensor = batch_data.get_torch_tensor(device='cpu')
                     # Convert to list of individual tensors for pipeline compatibility
                     cpu_tensors = [batch_tensor[i] for i in range(batch_tensor.shape[0])]
+                elif isinstance(batch_data, list):
+                    # Check if list contains tensors or ObjectRefs
+                    if len(batch_data) > 0 and isinstance(batch_data[0], torch.Tensor):
+                        # Producer-side parsing (parse_location="producer")
+                        # Pre-parsed tensors from producer (S→Q1 stage)
+                        # Ray auto-dereferenced the ObjectRef when retrieved from queue
+                        cpu_tensors = batch_data
+                    else:
+                        # Legacy: list of ObjectRefs - dereference them
+                        cpu_tensors = ray.get(batch_data)
                 else:
-                    # Fallback for list of ObjectRefs
+                    # Unknown type - try ray.get as last resort
                     cpu_tensors = ray.get(batch_data)
 
                 actual_batch_size = len(cpu_tensors)
@@ -666,10 +677,22 @@ class PeakNetPipelineActorBase:
                     nvtx_prefix=f"warmup_actor_{self.gpu_id}"
                 )
 
-            # Final sync to ensure all warmup work completes
+            # Final synchronization to ensure all warmup work completes
+            # Step 1: Sync pipeline streams (H2D, compute, D2H)
             self.pipeline.wait_for_completion()
-            logging.info(f"Warmup completed: {warmup_iterations} iterations processed")
-            
+
+            # Step 2: Explicit device synchronization (ensures ALL CUDA operations complete)
+            # This is critical for:
+            # - Preventing hangs when transitioning to production streaming
+            # - Creating clear profiling boundaries in nsys
+            # - Ensuring compiled kernels are fully initialized
+            torch.cuda.synchronize(self.gpu_id)
+
+            # Step 3: Clear CUDA cache to prevent memory fragmentation
+            torch.cuda.empty_cache()
+
+            logging.info(f"Warmup completed: {warmup_iterations} iterations processed, device synchronized")
+
         except Exception as e:
             logging.warning(f"Warmup failed: {e}, continuing without warmup")
 

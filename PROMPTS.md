@@ -375,3 +375,217 @@ bottleneck.  Now, I'm a bit concerns these changes are pre-mature.
 If I decide to do something on the producer side (lclstreamer), do you suggest I
 completely use the version at commit `1767603621f1d7f9c5726345b497ace4179c7c49`.
 What options do I have?
+
+---
+
+I'm facing a bottleneck likely from the producer side.
+
+Long story short, the producer was pushing in-memory HDF5 as payload to the
+socket.  I feel HDF5 buffer that the consumer (this repo) will process slows
+the entire pipeline significantly, to a degree where the ML double buffered
+pipeline is starving for data (so slow to unpack HDF5 and then stuff the
+underlying data into memory).
+
+Now, the lclstreamer supports NumpyBinarySerializer as evidenced in
+$STREAMER_DIR/examples/lclstreamer-random-to-sdfada-numpy.yaml.
+
+Could you check out the streamer's new numpy binary serializer, and understand
+it, and then propose an implementation of its consumer (for the "S to Q1"
+process to be more specific) in this repo so that I don't need to rely on HDF5
+anymore.
+
+There are many files in the current repo just to support HDF5.  In principle, I
+don't need these anymore.  If this helps you plan your implementation, please
+consider it.
+
+---
+
+One more thing if it's going to be helpful.  I have a pull script to pull these
+numpy binary data already.  It's in $STREAMER_DIR/examples/psana_pull_script_inspect_numpy.py
+
+---
+
+My working directory is $TEST_DIR.  I was using configs like 
+- peaknet-random-profile.yaml
+- peaknet-socket-profile.yaml
+but, again, these are primarily for the HDF5 use case.  Please update these
+configs - it will my testing become easier.
+
+---
+
+We got some errors.
+
+<text>(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:25,096 - INFO - ✅ CUDA context established on device 0
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:25,097 - INFO - Actor GPU: NVIDIA L40S (45596 MB)
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:25,097 - INFO - Actor CPU affinity: 0-11,24-59,72-95
+(PeakNetPipelineActorWithProfiling pid=1072367) PeakNet model created: 33.2M parameters
+(PeakNetPipelineActorWithProfiling pid=1072367) Backbone: ConvNextV2 [96, 192, 384, 768]
+(PeakNetPipelineActorWithProfiling pid=1072367) BiFPN: 2 blocks, 256 features
+(PeakNetPipelineActorWithProfiling pid=1072367) Input size: 1024×1024
+(PeakNetPipelineActorWithProfiling pid=1072367) ✓ Got num_classes from model config: 2
+(PeakNetPipelineActorWithProfiling pid=1072367) ⚠ PeakNet model on CPU: cpu
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:25,477 - INFO - PeakNet mode: input_shape=(1, 1024, 1024), output_shape=(2, 1024, 1024)
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:25,477 - INFO - Created autocast context: dtype=bfloat16
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Pipeline buffer validation:
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG]   Buffer A: input cuda:0, output cuda:0
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG]   Buffer B: input cuda:0, output cuda:0
+(PeakNetPipelineActorWithProfiling pid=1072367) ✓ All pipeline buffers verified on GPU 0
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Pipeline buffer memory: 1.500 GB (0.500 GB input + 1.000 GB output)
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:25,670 - INFO - ✅ PeakNetPipelineActor initialized successfully on GPU 0
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:25,670 - INFO - Model: peaknet_config=True, compile_mode=None, warmup_iterations=500
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:25,670 - INFO - Shapes: input_shape=(1, 1024, 1024), output_shape=(2, 1024, 1024)
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:25,681 - INFO - Actor 0: Starting streaming from queue
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Batch 0: input tensor device: cuda:0
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Batch 0: model device: cuda:0
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] GPU memory before inference: 1.62 GB
+(PeakNetPipelineActorWithProfiling pid=1072370) Creating PeakNet model from native configuration
+(PeakNetPipelineActorWithProfiling pid=1072370) Model image_size: 1024
+(PeakNetPipelineActorWithProfiling pid=1072370) Model num_channels: 1
+(PeakNetPipelineActorWithProfiling pid=1072370) Model num_classes: 2
+(PeakNetPipelineActorWithProfiling pid=1072370) PeakNet model created: 33.2M parameters
+(PeakNetPipelineActorWithProfiling pid=1072370) Backbone: ConvNextV2 [96, 192, 384, 768]
+(PeakNetPipelineActorWithProfiling pid=1072370) BiFPN: 2 blocks, 256 features
+(PeakNetPipelineActorWithProfiling pid=1072370) Input size: 1024×1024
+(PeakNetPipelineActorWithProfiling pid=1072370) ✓ Got num_classes from model config: 2
+(PeakNetPipelineActorWithProfiling pid=1072370) ⚠ PeakNet model on CPU: cpu
+(PeakNetPipelineActorWithProfiling pid=1072370) [DEBUG] Pipeline buffer validation:
+(PeakNetPipelineActorWithProfiling pid=1072370) [DEBUG]   Buffer A: input cuda:0, output cuda:0
+(PeakNetPipelineActorWithProfiling pid=1072370) [DEBUG]   Buffer B: input cuda:0, output cuda:0
+(PeakNetPipelineActorWithProfiling pid=1072370) ✓ All pipeline buffers verified on GPU 0
+(PeakNetPipelineActorWithProfiling pid=1072370) [DEBUG] Pipeline buffer memory: 1.500 GB (0.500 GB input + 1.000 GB output)
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:35,307 - ERROR - Actor 0: Failed to parse raw socket data: 'PeakNetPipelineActorWithProfiling' object has no attribute 'config'
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:35,309 - ERROR - Traceback (most recent call last):
+(PeakNetPipelineActorWithProfiling pid=1072367)   File "/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-pipeline-ray/peaknet_pipeline_ray/core/peaknet_ray_pipeline_actor.py", line 561, in _parse_raw_socket_data
+(PeakNetPipelineActorWithProfiling pid=1072367)     serialization_format = self.config.data_source.serialization_format
+(PeakNetPipelineActorWithProfiling pid=1072367)                            ^^^^^^^^^^^
+(PeakNetPipelineActorWithProfiling pid=1072367) AttributeError: 'PeakNetPipelineActorWithProfiling' object has no attribute 'config'
+(PeakNetPipelineActorWithProfiling pid=1072367)
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:24,795 - INFO - === Initializing PeakNetPipelineActor ===
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:24,802 - INFO - Using Ray-assigned GPU device 0 (physical GPU 1)
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:24,802 - INFO - ✅ Actor GPU assignment complete - using CUDA device 0
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:24,802 - INFO - CUDA_VISIBLE_DEVICES: 1
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:25,096 - INFO - ✅ CUDA context established on device 0
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:25,097 - INFO - Actor GPU: NVIDIA L40S (45596 MB)
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:25,097 - INFO - Actor CPU affinity: 0-11,24-59,72-95
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:25,482 - INFO - PeakNet mode: input_shape=(1, 1024, 1024), output_shape=(2, 1024, 1024)
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:25,482 - INFO - Created autocast context: dtype=bfloat16
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:25,683 - INFO - ✅ PeakNetPipelineActor initialized successfully on GPU 0
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:25,683 - INFO - Model: peaknet_config=True, compile_mode=None, warmup_iterations=500
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:25,683 - INFO - Shapes: input_shape=(1, 1024, 1024), output_shape=(2, 1024, 1024)
+(PeakNetPipelineActorWithProfiling pid=1072370) 2025-09-29 16:19:25,696 - INFO - Actor 0: Starting streaming from queue
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Batch 0: output tensor device: cuda:0
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] GPU memory after inference: 1.64 GB
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Batch 0: PeakNet forward pass completed on GPU
+(PeakNetPipelineActorWithProfiling pid=1072370)
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Batch 1: input tensor device: cuda:0 [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Batch 1: model device: cuda:0 [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] GPU memory before inference: 1.63 GB [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Batch 1: output tensor device: cuda:0 [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] GPU memory after inference: 1.64 GB [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367) [DEBUG] Batch 1: PeakNet forward pass completed on GPU [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367)
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:44,228 - ERROR - Actor 0: Failed to parse raw socket data: 'PeakNetPipelineActorWithProfiling' object has no attribute 'config' [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367) 2025-09-29 16:19:44,229 - ERROR - Traceback (most recent call last): [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367)   File "/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-pipeline-ray/peaknet_pipeline_ray/core/peaknet_ray_pipeline_actor.py", line 561, in _parse_raw_socket_data [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367)     serialization_format = self.config.data_source.serialization_format [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367)                            ^^^^^^^^^^^ [repeated 2x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1072367) AttributeError:
+'PeakNetPipelineActorWithProfiling' object has no attribute 'config' [repeated
+2x across cluster]</text>
+
+---
+
+I want to test two ideas in terms of using the numpy data source or serializer.
+If I understand it correctly right now they unpacking of these non-data happens
+between Q1 and P process, I believe it would be beneficial to also have an
+option to do our packing between the S and Q1 process so that I can pick and
+choose which one actually for us having a higher throughput.  Such
+configurability should be reflected in the configuration file as well.
+
+---
+
+It seems, after warm-up, the entire program hangs sometimes.  It gets stuck
+after 
+
+<text>(PeakNetPipelineActorWithProfiling pid=1205050) [DEBUG] Batch 99: output tensor device: cuda:0 [repeated 18x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1205050) [DEBUG] GPU memory after inference: 1.62 GB [repeated 18x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1205050) [DEBUG] Batch 99: PeakNet forward pass completed on GPU [repeated 18x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1205050) [DEBUG] Batch 99: input tensor device: cuda:0 [repeated 18x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1205050) [DEBUG] Batch 99: model device: cuda:0 [repeated 18x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1205050) [DEBUG] GPU memory before inference: 1.62 GB [repeated 18x across cluster]
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:01:39,784 - INFO - Warmup completed: 100 iterations processed
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:01:39,793 - INFO - ✅ PeakNetPipelineActor initialized successfully on GPU 0
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:01:39,793 - INFO - Model: peaknet_config=True, compile_mode=reduce-overhead, warmup_iterations=100
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:01:39,793 - INFO - Shapes: input_shape=(1, 1024, 1024), output_shape=(2, 1024, 1024)
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:01:39,804 - INFO - Actor 0: Starting streaming from queue
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:32,422 - INFO - === Initializing PeakNetPipelineActor ===
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:32,426 - INFO - Using Ray-assigned GPU device 0 (physical GPU 1)
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:32,426 - INFO - ✅ Actor GPU assignment complete - using CUDA device 0
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:32,426 - INFO - CUDA_VISIBLE_DEVICES: 1
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:32,818 - INFO - ✅ CUDA context established on device 0
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:32,819 - INFO - Actor GPU: NVIDIA L40S (45596 MB)
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:32,819 - INFO - Actor CPU affinity: 0-11,24-59,72-95
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:33,210 - INFO - PeakNet mode: input_shape=(1, 1024, 1024), output_shape=(2, 1024, 1024)
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:33,831 - INFO - Model compilation successful (mode=reduce-overhead)
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:33,832 - INFO - Created autocast context: dtype=bfloat16
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:34,777 - INFO - Running model warmup with 100 iterations...
+(PeakNetPipelineActorWithProfiling pid=1205047) 2025-09-29 17:00:35,076 - INFO - Warmup: Processing 100 iterations of batch size 64
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:01:44,574 - INFO - Producer 0: 100 batches (streaming), 70.8 MB/s, 100 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:02:19,224 - INFO - Producer 0: 200 batches (streaming), 99.2 MB/s, 200 packets
+(PeakNetPipelineActorWithProfiling pid=1205050) 2025-09-29 17:01:40,400 - INFO - Warmup completed: 100 iterations processed
+(PeakNetPipelineActorWithProfiling pid=1205050) 2025-09-29 17:01:40,401 - INFO - ✅ PeakNetPipelineActor initialized successfully on GPU 0
+(PeakNetPipelineActorWithProfiling pid=1205050) 2025-09-29 17:01:40,401 - INFO - Model: peaknet_config=True, compile_mode=reduce-overhead, warmup_iterations=100
+(PeakNetPipelineActorWithProfiling pid=1205050) 2025-09-29 17:01:40,401 - INFO - Shapes: input_shape=(1, 1024, 1024), output_shape=(2, 1024, 1024)
+(PeakNetPipelineActorWithProfiling pid=1205050) 2025-09-29 17:01:40,411 - INFO - Actor 0: Starting streaming from queue
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:02:54,517 - INFO - Producer 0: 300 batches (streaming), 114.1 MB/s, 300 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:03:29,458 - INFO - Producer 0: 400 batches (streaming), 123.5 MB/s, 400 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:04:04,296 - INFO - Producer 0: 500 batches (streaming), 130.1 MB/s, 500 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:04:40,008 - INFO - Producer 0: 600 batches (streaming), 134.4 MB/s, 600 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:05:17,231 - INFO -
+Producer 0: 700 batches (streaming), 136.9 MB/s, 700 packets</text>
+
+---
+
+New info, it's probably not because pipeline completion is not working, there's
+an error.
+<text>(LightweightSocketProducer pid=1064244) 2025-09-29 17:04:40,008 - INFO - Producer 0: 600 batches (streaming), 134.4 MB/s, 600 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:05:17,231 - INFO - Producer 0: 700 batches (streaming), 136.9 MB/s, 700 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:05:53,264 - INFO - Producer 0: 800 batches (streaming), 139.4 MB/s, 800 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:06:28,467 - INFO - Producer 0: 900 batches (streaming), 141.7 MB/s, 900 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:07:04,024 - INFO - Producer 0: 1000 batches (streaming), 143.4 MB/s, 1000 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:07:39,329 - INFO - Producer 0: 1100 batches (streaming), 145.0 MB/s, 1100 packets
+(LightweightSocketProducer pid=1064244) 2025-09-29 17:08:14,459 - INFO - Producer 0: 1200 batches (streaming), 146.4 MB/s, 1200 packets
+^C}
+⚠️  Streaming pipeline interrupted by user
+2025-09-29 17:08:38,469 ERROR worker.py:429 -- Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::PeakNetPipelineActorWithProfiling.process_from_queue() (pid=1205050, ip=172.24.49.154, actor_id=b4fb3883937c94e8dbbbb08408000000, repr=<peaknet_pipeline_ray.core.peaknet_ray_pipeline_actor.PeakNetPipelineActorWithProfiling object at 0x7f7d99798590>)
+  File "/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-pipeline-ray/peaknet_pipeline_ray/core/peaknet_ray_pipeline_actor.py", line 446, in process_from_queue
+    cpu_tensors = ray.get(batch_data)
+                                  ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    )
+TypeError: Attempting to call `get` on the value tensor([[[0.4382, 0.5596, 0.7700,  ..., 0.4647, 0.9677, 0.7944],
+         [0.2682, 0.1579, 0.3850,  ..., 0.8062, 0.1683, 0.6241],
+         [0.2398, 0.0187, 0.5544,  ..., 0.6737, 0.7616, 0.5904],
+         ...,
+         [0.0019, 0.8249, 0.0873,  ..., 0.4649, 0.7440, 0.3691],
+         [0.6528, 0.4507, 0.1004,  ..., 0.6657, 0.4851, 0.4122],
+         [0.7051, 0.1387, 0.9384,  ..., 0.6833, 0.1744, 0.2731]]]), which is not an ray.ObjectRef.
+2025-09-29 17:08:38,469 ERROR worker.py:429 -- Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::PeakNetPipelineActorWithProfiling.process_from_queue() (pid=1205047, ip=172.24.49.154, actor_id=0b1bfcafeff54e1226bd2d9608000000, repr=<peaknet_pipeline_ray.core.peaknet_ray_pipeline_actor.PeakNetPipelineActorWithProfiling object at 0x7f92ff6b4590>)
+  File "/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-pipeline-ray/peaknet_pipeline_ray/core/peaknet_ray_pipeline_actor.py", line 446, in process_from_queue
+    cpu_tensors = ray.get(batch_data)
+                                  ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    )
+TypeError: Attempting to call `get` on the value tensor([[[0.6346, 0.5324, 0.7743,  ..., 0.1034, 0.8416, 0.4465],
+         [0.2220, 0.5976, 0.0787,  ..., 0.9887, 0.7736, 0.8768],
+         [0.7289, 0.5832, 0.3108,  ..., 0.9056, 0.4011, 0.1606],
+         ...,
+         [0.0539, 0.1669, 0.1556,  ..., 0.3818, 0.3123, 0.8861],
+         [0.1565, 0.6961, 0.5499,  ..., 0.7683, 0.7997, 0.6751],
+         [0.3501, 0.4556, 0.4100,  ..., 0.0440, 0.3100, 0.9770]]]), which is not an ray.ObjectRef.
+(raylet) The target application terminated. One or more process it created re-parented.
+(raylet) Waiting for termination of re-parented processes.
+(raylet) Use the `--wait` option to modify this behavior.
+(raylet) The target application terminated. One or more process it created re-parented.
+(raylet) Waiting for termination of re-parented processes.
+(raylet) Use the `--wait` option to modify this behavior.</text>

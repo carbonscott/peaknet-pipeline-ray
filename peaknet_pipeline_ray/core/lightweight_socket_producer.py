@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-Lightweight Socket Producer - Optimized for Zero-Gap Pipeline Performance
+Lightweight Socket Producer - Configurable Parsing for Performance Testing
 
-This producer eliminates pipeline gaps by doing the absolute minimum work:
+This producer supports two parsing strategies to compare throughput:
+
+Mode 1 (parse_location="consumer", default): Q1→P parsing
 1. Receive raw bytes from socket
 2. Push raw bytes directly to queue
-3. Let pipeline actors do HDF5 parsing DURING GPU compute for perfect overlap
+3. Let pipeline actors parse DURING GPU compute for perfect overlap
 
-Key improvements over socket_hdf5_producer.py:
-- NO HDF5 parsing (moved to pipeline actor)
-- NO tensor creation (moved to pipeline actor)
-- NO Ray object serialization overhead
-- Ultra-fast socket→queue flow keeps pipeline fed
+Mode 2 (parse_location="producer"): S→Q1 parsing
+1. Receive raw bytes from socket
+2. Parse immediately in producer
+3. Push parsed tensors to queue
+
+This configurability allows A/B testing to determine optimal parsing location.
 """
 
 import ray
@@ -83,6 +86,11 @@ class LightweightSocketProducer:
         self.socket = None
         self.socket_address = f"tcp://{config.socket_hostname}:{config.socket_port}"
 
+        # Parsing configuration (extracted from config for convenience)
+        self.parse_location = config.parse_location
+        self.serialization_format = config.serialization_format
+        self.fields = config.fields
+
         # Statistics tracking
         self.stats = LightweightProducerStats()
 
@@ -91,7 +99,7 @@ class LightweightSocketProducer:
 
         logging.info(
             f"LightweightSocketProducer {producer_id} initialized: "
-            f"socket={self.socket_address}"
+            f"socket={self.socket_address}, parse_location={self.parse_location}"
         )
 
     def _connect_socket(self) -> bool:
@@ -130,6 +138,99 @@ class LightweightSocketProducer:
             logging.error(f"Producer {self.producer_id}: Socket receive error: {e}")
             return None
 
+    def _parse_raw_bytes(self, raw_bytes: bytes) -> List:
+        """
+        Parse raw socket bytes into list of tensors for producer-side parsing.
+
+        This method executes the same parsing logic as the actor's _parse_raw_socket_data()
+        but runs in the producer (S→Q1 stage) instead of the consumer (Q1→P stage).
+
+        Supports two serialization formats:
+        - NumPy .npz format (fast, recommended): Uses np.load() for simple dictionary access
+        - HDF5 format (legacy): Uses h5py for hierarchical structure parsing
+
+        Args:
+            raw_bytes: Raw bytes from socket containing detector data in (B, C, H, W) format
+
+        Returns:
+            List of torch tensors, each with shape (C, H, W) ready for pipeline processing
+        """
+        from io import BytesIO
+        import numpy as np
+        import torch
+
+        try:
+            if self.serialization_format == "numpy":
+                # Fast NumPy .npz parsing (3-7x faster than HDF5)
+                arrays = np.load(BytesIO(raw_bytes))
+
+                # Extract detector data using field mapping
+                detector_data_key = self.fields.get("detector_data", "data")
+
+                if detector_data_key not in arrays.files:
+                    raise ValueError(f"Detector data key '{detector_data_key}' not found in .npz. Available keys: {arrays.files}")
+
+                detector_data = arrays[detector_data_key]
+                arrays.close()
+
+            elif self.serialization_format == "hdf5":
+                # Legacy HDF5 parsing (slower, for backward compatibility)
+                import h5py
+                import hdf5plugin
+
+                with h5py.File(BytesIO(raw_bytes), 'r') as h5_file:
+                    detector_data_path = self.fields.get("detector_data", "/data/data")
+
+                    if detector_data_path in h5_file:
+                        detector_data = h5_file[detector_data_path][:]
+                    else:
+                        # Try common fallback paths
+                        possible_paths = ['/data/data', '/entry/data/detector_data', '/detector_data']
+                        detector_data = None
+                        for path in possible_paths:
+                            if path in h5_file:
+                                detector_data = h5_file[path][:]
+                                break
+
+                        # Last resort: use first available dataset
+                        if detector_data is None:
+                            for key in h5_file.keys():
+                                if hasattr(h5_file[key], 'shape'):
+                                    detector_data = h5_file[key][:]
+                                    logging.debug(f"Producer {self.producer_id}: Using fallback field '{key}' for detector data")
+                                    break
+
+                        if detector_data is None:
+                            raise ValueError(f"Detector data path '{detector_data_path}' not found in HDF5. Available paths: {list(h5_file.keys())}")
+            else:
+                raise ValueError(f"Unknown serialization format: {self.serialization_format}. Must be 'numpy' or 'hdf5'")
+
+            # Convert to numpy array if needed
+            if not isinstance(detector_data, np.ndarray):
+                detector_data = np.array(detector_data)
+
+            # Expect preprocessed data in (B, C, H, W) format
+            if len(detector_data.shape) != 4:
+                raise ValueError(f"Unexpected detector data shape: {detector_data.shape}. Expected (B, C, H, W) format from preprocessed producer")
+
+            # Extract individual (C, H, W) samples from (B, C, H, W) batch
+            cpu_tensors = [torch.from_numpy(detector_data[i].astype(np.float32))
+                         for i in range(detector_data.shape[0])]
+
+            logging.debug(
+                f"Producer {self.producer_id}: Parsed raw {self.serialization_format} data -> {len(cpu_tensors)} tensors, "
+                f"each with shape {cpu_tensors[0].shape if cpu_tensors else 'empty'}"
+            )
+
+            return cpu_tensors
+
+        except Exception as e:
+            logging.error(f"Producer {self.producer_id}: Failed to parse raw bytes: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            # Return empty list as fallback
+            return []
+
     def _create_raw_socket_data(self, raw_bytes: bytes) -> RawSocketData:
         """Create minimal wrapper for raw bytes (ultra-fast).
 
@@ -152,25 +253,28 @@ class LightweightSocketProducer:
             batch_id=batch_id
         )
 
-    def _push_to_queue(self, queue_manager: ShardedQueueManager, raw_data: RawSocketData) -> bool:
-        """Push raw data to pipeline queue (fast operation).
+    def _push_to_queue(self, queue_manager: ShardedQueueManager, data) -> bool:
+        """Push data to pipeline queue (fast operation).
 
         Args:
             queue_manager: Queue manager for pipeline
-            raw_data: Raw socket data wrapper
+            data: Either RawSocketData (unparsed) or List[torch.Tensor] (parsed)
 
         Returns:
             True if successful, False if backpressure
         """
         try:
-            # Single Ray object store operation for the entire raw data
-            obj_ref = ray.put(raw_data)
+            # Single Ray object store operation for the entire data
+            obj_ref = ray.put(data)
 
             # Push to queue
             success = queue_manager.put(obj_ref)
             if success:
                 self.stats.batches_generated += 1
-                logging.debug(f"Producer {self.producer_id}: Pushed raw batch {self.batch_counter} ({len(raw_data)} bytes)")
+                if hasattr(data, 'raw_bytes'):
+                    logging.debug(f"Producer {self.producer_id}: Pushed raw batch {self.batch_counter} ({len(data)} bytes)")
+                else:
+                    logging.debug(f"Producer {self.producer_id}: Pushed parsed batch {self.batch_counter} ({len(data)} tensors)")
                 return True
             else:
                 logging.warning(f"Producer {self.producer_id}: Queue full for batch {self.batch_counter}")
@@ -189,10 +293,11 @@ class LightweightSocketProducer:
         progress_interval: int = 10
     ) -> Dict[str, Any]:
         """
-        Main streaming loop: ultra-fast socket→queue flow.
+        Main streaming loop: configurable socket→queue flow with optional parsing.
 
-        This is the KEY OPTIMIZATION: Minimal work per iteration to maximize
-        socket throughput and eliminate pipeline gaps.
+        Supports two parsing strategies (controlled by parse_location config):
+        1. "consumer" (Q1→P): Push raw bytes, let actor parse during GPU overlap (default)
+        2. "producer" (S→Q1): Parse in producer before queueing for comparison
 
         Args:
             queue_manager: Pipeline input queue manager
@@ -223,11 +328,19 @@ class LightweightSocketProducer:
                     logging.info(f"Producer {self.producer_id}: Socket closed/timeout, streaming completed normally")
                     break
 
-                # STEP 2: Create minimal wrapper (ultra-fast)
-                raw_data = self._create_raw_socket_data(raw_bytes)
+                # STEP 2: Process data based on parse_location config
+                if self.parse_location == "producer":
+                    # S→Q1 parsing: Parse immediately before queueing
+                    data = self._parse_raw_bytes(raw_bytes)
+                    if not data:  # Empty list means parsing failed
+                        logging.warning(f"Producer {self.producer_id}: Parsing failed for batch {self.batch_counter}, skipping")
+                        continue
+                else:
+                    # Q1→P parsing: Create minimal wrapper, defer parsing to consumer
+                    data = self._create_raw_socket_data(raw_bytes)
 
                 # STEP 3: Push to queue (fast Ray operation)
-                success = self._push_to_queue(queue_manager, raw_data)
+                success = self._push_to_queue(queue_manager, data)
                 if not success:
                     # Backpressure - wait briefly and retry
                     time.sleep(0.01)
