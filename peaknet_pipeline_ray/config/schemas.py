@@ -1,7 +1,7 @@
 """Configuration schemas for PeakNet Pipeline using dataclasses."""
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import yaml
 from pathlib import Path
 
@@ -46,9 +46,12 @@ class DataSourceConfig:
     """Configuration for data source (random or socket)."""
     source_type: str = "random"  # "random" or "socket"
 
-    # Socket configuration
-    socket_hostname: str = "localhost"
-    socket_port: int = 12321
+    # Multi-socket configuration (REQUIRED for socket mode)
+    # List of (hostname, port) tuples for socket sources
+    # Single socket example: [("sdfada012", 12321)]
+    # Multi-socket example: [("sdfada012", 12321), ("sdfada012", 12322)]
+    socket_addresses: Optional[List[Tuple[str, int]]] = None
+
     socket_timeout: float = 10.0
     socket_retry_attempts: int = 3
 
@@ -56,12 +59,20 @@ class DataSourceConfig:
     # Users must specify the expected data shape upfront for proper initialization
     shape: Tuple[int, int] = (1691, 1691)  # H, W - actual detector data size
 
-    # HDF5 field mapping (matches LCLStreamer format)
+    # Serialization format for socket data
+    serialization_format: str = "numpy"  # "numpy" for .npz format (fast), "hdf5" for legacy HDF5 format
+
+    # Parsing location for socket data
+    parse_location: str = "consumer"  # "producer" = parse in S→Q1 stage, "consumer" = parse in Q1→P stage (default)
+
+    # Field mapping (format depends on serialization_format)
+    # - NumPy format: flat keys like "data", "timestamp", "wavelength"
+    # - HDF5 format: hierarchical paths like "/data/data", "/data/timestamp"
     fields: Dict[str, str] = field(default_factory=lambda: {
-        "detector_data": "/data/data",
-        "timestamp": "/data/timestamp",
-        "photon_wavelength": "/data/wavelength",
-        "random": "/data/random"
+        "detector_data": "data",
+        "timestamp": "timestamp",
+        "photon_wavelength": "wavelength",
+        "random": "random"
     })
 
     # Batch assembly configuration
@@ -194,11 +205,12 @@ class PipelineConfig:
             },
             'data_source': {
                 'source_type': self.data_source.source_type,
-                'socket_hostname': self.data_source.socket_hostname,
-                'socket_port': self.data_source.socket_port,
+                'socket_addresses': self.data_source.socket_addresses,
                 'socket_timeout': self.data_source.socket_timeout,
                 'socket_retry_attempts': self.data_source.socket_retry_attempts,
                 'shape': list(self.data_source.shape) if self.data_source.shape else None,
+                'serialization_format': self.data_source.serialization_format,
+                'parse_location': self.data_source.parse_location,
                 'fields': self.data_source.fields,
                 'batch_assembly': self.data_source.batch_assembly,
                 'batch_timeout': self.data_source.batch_timeout,

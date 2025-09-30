@@ -49,6 +49,8 @@ class PeakNetPipelineActorBase:
         deterministic: bool = False,
         gpu_id: int = None,
         precision_dtype: str = "float32",
+        serialization_format: str = "numpy",
+        fields: Dict[str, str] = None,
     ):
         """
         Initialize the pipeline actor.
@@ -64,6 +66,8 @@ class PeakNetPipelineActorBase:
             deterministic: Use deterministic operations
             gpu_id: Explicit GPU ID to use (None for Ray auto-assignment)
             precision_dtype: Precision type for mixed precision ('float32', 'bfloat16', 'float16')
+            serialization_format: Data serialization format ('numpy' or 'hdf5')
+            fields: Field mapping dictionary for data extraction
         """
         logging.info("=== Initializing PeakNetPipelineActor ===")
 
@@ -120,6 +124,8 @@ class PeakNetPipelineActorBase:
         self.configured_warmup_iterations = warmup_iterations
         self.pin_memory = pin_memory
         self.deterministic = deterministic
+        self.serialization_format = serialization_format
+        self.fields = fields or {"detector_data": "data"}
 
         # Get system info
         self.numa_info = get_numa_info()
@@ -428,15 +434,26 @@ class PeakNetPipelineActorBase:
 
                 # Extract data from different sources
                 if hasattr(batch_data, 'raw_bytes'):
-                    # NEW: RawSocketData - parse HDF5 during GPU overlap
+                    # Consumer-side parsing (parse_location="consumer")
+                    # RawSocketData - parse during GPU overlap (Q1→P stage)
                     cpu_tensors = self._parse_raw_socket_data(batch_data)
                 elif hasattr(batch_data, 'get_torch_tensor'):
                     # PipelineInput object - get as individual tensors
                     batch_tensor = batch_data.get_torch_tensor(device='cpu')
                     # Convert to list of individual tensors for pipeline compatibility
                     cpu_tensors = [batch_tensor[i] for i in range(batch_tensor.shape[0])]
+                elif isinstance(batch_data, list):
+                    # Check if list contains tensors or ObjectRefs
+                    if len(batch_data) > 0 and isinstance(batch_data[0], torch.Tensor):
+                        # Producer-side parsing (parse_location="producer")
+                        # Pre-parsed tensors from producer (S→Q1 stage)
+                        # Ray auto-dereferenced the ObjectRef when retrieved from queue
+                        cpu_tensors = batch_data
+                    else:
+                        # Legacy: list of ObjectRefs - dereference them
+                        cpu_tensors = ray.get(batch_data)
                 else:
-                    # Fallback for list of ObjectRefs
+                    # Unknown type - try ray.get as last resort
                     cpu_tensors = ray.get(batch_data)
 
                 actual_batch_size = len(cpu_tensors)
@@ -534,71 +551,100 @@ class PeakNetPipelineActorBase:
 
     def _parse_raw_socket_data(self, raw_socket_data) -> List[torch.Tensor]:
         """
-        Parse raw HDF5 bytes into tensors during GPU compute overlap.
+        Parse raw socket bytes into tensors during GPU compute overlap.
 
-        This method executes the HDF5 parsing and tensor creation that was
+        This method executes the parsing and tensor creation that was
         moved from the socket producer to achieve CPU/GPU overlap.
 
-        The producer now sends preprocessed data in (B, C, H, W) format,
+        Supports two serialization formats:
+        - NumPy .npz format (fast, recommended): Uses np.load() for simple dictionary access
+        - HDF5 format (legacy): Uses h5py for hierarchical structure parsing
+
+        The producer sends preprocessed data in (B, C, H, W) format,
         which is extracted into individual (C, H, W) tensors for the pipeline.
 
         Args:
-            raw_socket_data: RawSocketData object with raw HDF5 bytes containing
+            raw_socket_data: RawSocketData object with raw bytes containing
                            detector data in (B, C, H, W) format
 
         Returns:
             List of torch tensors, each with shape (C, H, W) ready for pipeline processing
         """
-        import h5py
-        import hdf5plugin
         from io import BytesIO
         import numpy as np
 
         try:
-            # Parse HDF5 data from raw bytes
-            with h5py.File(BytesIO(raw_socket_data.raw_bytes), 'r') as h5_file:
-                # Extract detector data (adapt field mapping as needed)
-                detector_data = None
+            # Determine serialization format from actor configuration
+            serialization_format = self.serialization_format
 
-                # Try common detector data paths
-                possible_paths = ['/data/data', '/entry/data/detector_data', '/detector_data']
-                for path in possible_paths:
-                    if path in h5_file:
-                        detector_data = h5_file[path][:]
-                        break
+            if serialization_format == "numpy":
+                # Fast NumPy .npz parsing (3-7x faster than HDF5)
+                arrays = np.load(BytesIO(raw_socket_data.raw_bytes))
 
-                if detector_data is None:
-                    # Fallback: use first available dataset
-                    for key in h5_file.keys():
-                        if hasattr(h5_file[key], 'shape'):
-                            detector_data = h5_file[key][:]
-                            logging.debug(f"Actor {self.gpu_id}: Using fallback field '{key}' for detector data")
-                            break
+                # Extract detector data using field mapping from actor configuration
+                detector_data_key = self.fields.get("detector_data", "data")
 
-                if detector_data is None:
-                    raise ValueError("No detector data found in HDF5")
+                if detector_data_key not in arrays.files:
+                    raise ValueError(f"Detector data key '{detector_data_key}' not found in .npz. Available keys: {arrays.files}")
 
-                # Convert to numpy array if needed
-                if not isinstance(detector_data, np.ndarray):
-                    detector_data = np.array(detector_data)
+                detector_data = arrays[detector_data_key]
+                arrays.close()
 
-                # Producer now always sends preprocessed data in (B, C, H, W) format
-                if len(detector_data.shape) != 4:
-                    raise ValueError(f"Unexpected detector data shape: {detector_data.shape}. Expected (B, C, H, W) format from preprocessed producer")
+            elif serialization_format == "hdf5":
+                # Legacy HDF5 parsing (slower, for backward compatibility)
+                import h5py
+                import hdf5plugin
 
-                # Extract individual (C, H, W) samples from (B, C, H, W) batch
-                cpu_tensors = [torch.from_numpy(detector_data[i].astype(np.float32))
-                             for i in range(detector_data.shape[0])]
+                with h5py.File(BytesIO(raw_socket_data.raw_bytes), 'r') as h5_file:
+                    detector_data_path = self.fields.get("detector_data", "/data/data")
 
-                logging.debug(
-                    f"Actor {self.gpu_id}: Parsed raw HDF5 -> {len(cpu_tensors)} tensors, "
-                    f"each with shape {cpu_tensors[0].shape if cpu_tensors else 'empty'} (preprocessed from producer)"
-                )
+                    if detector_data_path in h5_file:
+                        detector_data = h5_file[detector_data_path][:]
+                    else:
+                        # Try common fallback paths
+                        possible_paths = ['/data/data', '/entry/data/detector_data', '/detector_data']
+                        detector_data = None
+                        for path in possible_paths:
+                            if path in h5_file:
+                                detector_data = h5_file[path][:]
+                                break
 
-                return cpu_tensors
+                        # Last resort: use first available dataset
+                        if detector_data is None:
+                            for key in h5_file.keys():
+                                if hasattr(h5_file[key], 'shape'):
+                                    detector_data = h5_file[key][:]
+                                    logging.debug(f"Actor {self.gpu_id}: Using fallback field '{key}' for detector data")
+                                    break
+
+                        if detector_data is None:
+                            raise ValueError(f"Detector data path '{detector_data_path}' not found in HDF5. Available paths: {list(h5_file.keys())}")
+            else:
+                raise ValueError(f"Unknown serialization format: {serialization_format}. Must be 'numpy' or 'hdf5'")
+
+            # Convert to numpy array if needed
+            if not isinstance(detector_data, np.ndarray):
+                detector_data = np.array(detector_data)
+
+            # Producer sends preprocessed data in (B, C, H, W) format
+            if len(detector_data.shape) != 4:
+                raise ValueError(f"Unexpected detector data shape: {detector_data.shape}. Expected (B, C, H, W) format from preprocessed producer")
+
+            # Extract individual (C, H, W) samples from (B, C, H, W) batch
+            cpu_tensors = [torch.from_numpy(detector_data[i].astype(np.float32))
+                         for i in range(detector_data.shape[0])]
+
+            logging.debug(
+                f"Actor {self.gpu_id}: Parsed raw {serialization_format} data -> {len(cpu_tensors)} tensors, "
+                f"each with shape {cpu_tensors[0].shape if cpu_tensors else 'empty'}"
+            )
+
+            return cpu_tensors
 
         except Exception as e:
             logging.error(f"Actor {self.gpu_id}: Failed to parse raw socket data: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
             # Return empty tensor as fallback to prevent pipeline crash
             fallback_tensor = torch.zeros(self.input_shape, dtype=torch.float32)
             return [fallback_tensor]
@@ -631,10 +677,22 @@ class PeakNetPipelineActorBase:
                     nvtx_prefix=f"warmup_actor_{self.gpu_id}"
                 )
 
-            # Final sync to ensure all warmup work completes
+            # Final synchronization to ensure all warmup work completes
+            # Step 1: Sync pipeline streams (H2D, compute, D2H)
             self.pipeline.wait_for_completion()
-            logging.info(f"Warmup completed: {warmup_iterations} iterations processed")
-            
+
+            # Step 2: Explicit device synchronization (ensures ALL CUDA operations complete)
+            # This is critical for:
+            # - Preventing hangs when transitioning to production streaming
+            # - Creating clear profiling boundaries in nsys
+            # - Ensuring compiled kernels are fully initialized
+            torch.cuda.synchronize(self.gpu_id)
+
+            # Step 3: Clear CUDA cache to prevent memory fragmentation
+            torch.cuda.empty_cache()
+
+            logging.info(f"Warmup completed: {warmup_iterations} iterations processed, device synchronized")
+
         except Exception as e:
             logging.warning(f"Warmup failed: {e}, continuing without warmup")
 
@@ -716,9 +774,14 @@ class PeakNetPipelineActor(PeakNetPipelineActorBase):
     pass
 
 
-@ray.remote(num_gpus=1, runtime_env={"nsight": "default"})
+@ray.remote(num_gpus=1, runtime_env={"nsight": {
+    "t": "cuda,cudnn,cublas,nvtx,osrt",
+    "cuda-graph-trace": "node",
+    "cuda-memory-usage": "true",
+    "stop-on-exit": "true",
+}})
 class PeakNetPipelineActorWithProfiling(PeakNetPipelineActorBase):
-    """Ray actor for PeakNet pipeline processing with nsys profiling enabled."""
+    """Ray actor with enhanced nsys profiling for CUDA graphs."""
     pass
 
 

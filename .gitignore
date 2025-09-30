@@ -45,3 +45,9 @@ profiling_results/
 
 # Test results
 test_results/
+
+# Development notes (keep local only)
+MIX_PRECISION.md
+NOTES.md
+LESSONS_02.md
+PROMPTS.md

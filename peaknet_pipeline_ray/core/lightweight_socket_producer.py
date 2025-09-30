@@ -1,35 +1,32 @@
 #!/usr/bin/env python3
 """
-Socket Producer with Integrated HDF5 Parsing - Optimized for GPU Resource Utilization
+Lightweight Socket Producer - Configurable Parsing for Performance Testing
 
-This producer eliminates GPU actor overhead by performing HDF5 parsing in the producer stage:
+This producer supports two parsing strategies to compare throughput:
+
+Mode 1 (parse_location="consumer", default): Q1→P parsing
 1. Receive raw bytes from socket
-2. Parse HDF5 data and create PipelineInput objects
-3. Push ready-to-use data to queue for GPU actors
+2. Push raw bytes directly to queue
+3. Let pipeline actors parse DURING GPU compute for perfect overlap
 
-Key improvements over previous architecture:
-- HDF5 parsing moved from GPU actors to dedicated producer CPU cores
-- Eliminates 1-2ms parsing overhead per batch from GPU actors
-- Creates PipelineInput objects (same as random data sources)
-- Configurable HDF5 field mapping support
-- Better resource separation: I/O processing vs pure GPU compute
+Mode 2 (parse_location="producer"): S→Q1 parsing
+1. Receive raw bytes from socket
+2. Parse immediately in producer
+3. Push parsed tensors to queue
+
+This configurability allows A/B testing to determine optimal parsing location.
 """
 
 import ray
 import time
 import logging
 import uuid
-import numpy as np
-from io import BytesIO
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-import h5py
-import hdf5plugin  # For compression support
 from pynng import Pull0
 
 from ..config.schemas import DataSourceConfig
-from ..config.data_structures import PipelineInput
 from ..utils.queue import ShardedQueueManager
 
 logging.basicConfig(level=logging.INFO)
@@ -50,11 +47,10 @@ class RawSocketData:
 
 @dataclass
 class LightweightProducerStats:
-    """Statistics for socket producer with HDF5 parsing."""
+    """Minimal statistics for lightweight producer."""
     packets_received: int = 0
     bytes_received: int = 0
     batches_generated: int = 0
-    parsing_errors: int = 0
     connection_retries: int = 0
     queue_errors: int = 0
 
@@ -62,23 +58,18 @@ class LightweightProducerStats:
 @ray.remote
 class LightweightSocketProducer:
     """
-    Socket producer with integrated HDF5 parsing for optimal pipeline performance.
+    Ultra-fast socket producer that only handles raw bytes.
 
-    This producer now performs HDF5 parsing in the producer stage (moved from GPU actors)
-    to eliminate the 1-2ms parsing overhead from GPU actors. This improves resource
-    utilization by separating I/O processing from GPU compute operations.
-
-    Key features:
-    - HDF5 parsing in dedicated producer CPU cores (not GPU-bound cores)
-    - Creates ready-to-use PipelineInput objects (same as random data sources)
-    - Configurable field mapping for different HDF5 formats
-    - Error handling and statistics tracking for parsing operations
+    This producer maximizes socket throughput by eliminating all processing
+    overhead. HDF5 parsing and tensor creation are deferred to pipeline actors
+    where they can overlap with GPU compute.
     """
 
     def __init__(
         self,
         producer_id: int,
         config: DataSourceConfig,
+        socket_address: str,
         deterministic: bool = False
     ):
         """Initialize lightweight socket producer.
@@ -86,6 +77,7 @@ class LightweightSocketProducer:
         Args:
             producer_id: Unique identifier for this producer
             config: Data source configuration with socket details
+            socket_address: Socket address to connect to (e.g., "tcp://sdfada012:12321")
             deterministic: Use deterministic batch IDs for testing
         """
         self.producer_id = producer_id
@@ -94,7 +86,12 @@ class LightweightSocketProducer:
 
         # Socket connection
         self.socket = None
-        self.socket_address = f"tcp://{config.socket_hostname}:{config.socket_port}"
+        self.socket_address = socket_address
+
+        # Parsing configuration (extracted from config for convenience)
+        self.parse_location = config.parse_location
+        self.serialization_format = config.serialization_format
+        self.fields = config.fields
 
         # Statistics tracking
         self.stats = LightweightProducerStats()
@@ -104,7 +101,7 @@ class LightweightSocketProducer:
 
         logging.info(
             f"LightweightSocketProducer {producer_id} initialized: "
-            f"socket={self.socket_address}"
+            f"socket={self.socket_address}, parse_location={self.parse_location}"
         )
 
     def _connect_socket(self) -> bool:
@@ -143,125 +140,143 @@ class LightweightSocketProducer:
             logging.error(f"Producer {self.producer_id}: Socket receive error: {e}")
             return None
 
-    def _create_pipeline_input(self, raw_bytes: bytes) -> Optional[PipelineInput]:
-        """Parse HDF5 data and create PipelineInput object.
+    def _parse_raw_bytes(self, raw_bytes: bytes) -> List:
+        """
+        Parse raw socket bytes into list of tensors for producer-side parsing.
 
-        This method moves HDF5 parsing from GPU actors to the producer stage
-        for better performance and resource utilization.
+        This method executes the same parsing logic as the actor's _parse_raw_socket_data()
+        but runs in the producer (S→Q1 stage) instead of the consumer (Q1→P stage).
+
+        Supports two serialization formats:
+        - NumPy .npz format (fast, recommended): Uses np.load() for simple dictionary access
+        - HDF5 format (legacy): Uses h5py for hierarchical structure parsing
+
+        Args:
+            raw_bytes: Raw bytes from socket containing detector data in (B, C, H, W) format
+
+        Returns:
+            List of torch tensors, each with shape (C, H, W) ready for pipeline processing
+        """
+        from io import BytesIO
+        import numpy as np
+        import torch
+
+        try:
+            if self.serialization_format == "numpy":
+                # Fast NumPy .npz parsing (3-7x faster than HDF5)
+                arrays = np.load(BytesIO(raw_bytes))
+
+                # Extract detector data using field mapping
+                detector_data_key = self.fields.get("detector_data", "data")
+
+                if detector_data_key not in arrays.files:
+                    raise ValueError(f"Detector data key '{detector_data_key}' not found in .npz. Available keys: {arrays.files}")
+
+                detector_data = arrays[detector_data_key]
+                arrays.close()
+
+            elif self.serialization_format == "hdf5":
+                # Legacy HDF5 parsing (slower, for backward compatibility)
+                import h5py
+                import hdf5plugin
+
+                with h5py.File(BytesIO(raw_bytes), 'r') as h5_file:
+                    detector_data_path = self.fields.get("detector_data", "/data/data")
+
+                    if detector_data_path in h5_file:
+                        detector_data = h5_file[detector_data_path][:]
+                    else:
+                        # Try common fallback paths
+                        possible_paths = ['/data/data', '/entry/data/detector_data', '/detector_data']
+                        detector_data = None
+                        for path in possible_paths:
+                            if path in h5_file:
+                                detector_data = h5_file[path][:]
+                                break
+
+                        # Last resort: use first available dataset
+                        if detector_data is None:
+                            for key in h5_file.keys():
+                                if hasattr(h5_file[key], 'shape'):
+                                    detector_data = h5_file[key][:]
+                                    logging.debug(f"Producer {self.producer_id}: Using fallback field '{key}' for detector data")
+                                    break
+
+                        if detector_data is None:
+                            raise ValueError(f"Detector data path '{detector_data_path}' not found in HDF5. Available paths: {list(h5_file.keys())}")
+            else:
+                raise ValueError(f"Unknown serialization format: {self.serialization_format}. Must be 'numpy' or 'hdf5'")
+
+            # Convert to numpy array if needed
+            if not isinstance(detector_data, np.ndarray):
+                detector_data = np.array(detector_data)
+
+            # Expect preprocessed data in (B, C, H, W) format
+            if len(detector_data.shape) != 4:
+                raise ValueError(f"Unexpected detector data shape: {detector_data.shape}. Expected (B, C, H, W) format from preprocessed producer")
+
+            # Extract individual (C, H, W) samples from (B, C, H, W) batch
+            cpu_tensors = [torch.from_numpy(detector_data[i].astype(np.float32))
+                         for i in range(detector_data.shape[0])]
+
+            logging.debug(
+                f"Producer {self.producer_id}: Parsed raw {self.serialization_format} data -> {len(cpu_tensors)} tensors, "
+                f"each with shape {cpu_tensors[0].shape if cpu_tensors else 'empty'}"
+            )
+
+            return cpu_tensors
+
+        except Exception as e:
+            logging.error(f"Producer {self.producer_id}: Failed to parse raw bytes: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            # Return empty list as fallback
+            return []
+
+    def _create_raw_socket_data(self, raw_bytes: bytes) -> RawSocketData:
+        """Create minimal wrapper for raw bytes (ultra-fast).
 
         Args:
             raw_bytes: Raw HDF5 data from socket
 
         Returns:
-            PipelineInput object with parsed data or None if parsing failed
+            RawSocketData wrapper with minimal metadata
         """
-        try:
-            # Parse HDF5 data from raw bytes
-            with h5py.File(BytesIO(raw_bytes), 'r') as h5_file:
-                extracted_data = {}
+        # Create batch ID (minimal overhead)
+        if self.deterministic:
+            batch_id = f"producer_{self.producer_id}_batch_{self.batch_counter}"
+        else:
+            batch_id = f"producer_{self.producer_id}_{uuid.uuid4().hex[:8]}"
 
-                # Extract each configured field
-                for field_name, hdf5_path in self.config.fields.items():
-                    if hdf5_path in h5_file:
-                        try:
-                            data = h5_file[hdf5_path][:]
-                            extracted_data[field_name] = data
-                        except Exception as e:
-                            logging.warning(
-                                f"Producer {self.producer_id}: Failed to read {hdf5_path}: {e}"
-                            )
-                    else:
-                        logging.debug(f"Producer {self.producer_id}: Field {hdf5_path} not found in HDF5")
+        return RawSocketData(
+            raw_bytes=raw_bytes,
+            timestamp=time.time(),
+            producer_id=self.producer_id,
+            batch_id=batch_id
+        )
 
-                # Validate required fields
-                missing_fields = [field for field in self.config.required_fields
-                                if field not in extracted_data]
-                if missing_fields:
-                    logging.error(
-                        f"Producer {self.producer_id}: Missing required fields: {missing_fields}"
-                    )
-                    return None
-
-                # Extract detector data (main image data)
-                detector_data = extracted_data.get("detector_data")
-                if detector_data is None:
-                    logging.error(f"Producer {self.producer_id}: No detector_data found in extracted data")
-                    return None
-
-                # Convert to numpy array if needed
-                if not isinstance(detector_data, np.ndarray):
-                    detector_data = np.array(detector_data)
-
-                # Ensure proper data format
-                # Handle different input shapes and convert to expected format
-                if len(detector_data.shape) == 2:
-                    # Single sample: (H, W) -> add batch and channel dimensions -> (1, 1, H, W)
-                    detector_data = detector_data[np.newaxis, np.newaxis, ...]
-                elif len(detector_data.shape) == 3:
-                    # Could be (B, H, W) or (C, H, W)
-                    # Assume it's (B, H, W) and add channel dimension -> (B, 1, H, W)
-                    detector_data = detector_data[:, np.newaxis, ...]
-                elif len(detector_data.shape) == 4:
-                    # Already in (B, C, H, W) format
-                    pass
-                else:
-                    raise ValueError(f"Unexpected detector data shape: {detector_data.shape}")
-
-                # Create metadata from other fields
-                metadata = {}
-                for field_name, field_value in extracted_data.items():
-                    if field_name != "detector_data":
-                        # Convert numpy arrays to native Python types for metadata
-                        if isinstance(field_value, np.ndarray):
-                            if field_value.size == 1:
-                                metadata[field_name] = field_value.item()
-                            else:
-                                metadata[field_name] = field_value.tolist()
-                        else:
-                            metadata[field_name] = field_value
-
-                # Add producer metadata
-                metadata['producer_id'] = self.producer_id
-                metadata['reception_timestamp'] = time.time()
-
-                # Create batch ID
-                if self.deterministic:
-                    batch_id = f"producer_{self.producer_id}_batch_{self.batch_counter}"
-                else:
-                    batch_id = f"producer_{self.producer_id}_{uuid.uuid4().hex[:8]}"
-
-                # Create PipelineInput using the efficient ObjectRef mode
-                return PipelineInput.from_numpy_array(
-                    numpy_array=detector_data.astype(np.float32),
-                    metadata=metadata,
-                    batch_id=batch_id
-                )
-
-        except Exception as e:
-            self.stats.parsing_errors += 1
-            logging.error(f"Producer {self.producer_id}: HDF5 parsing error: {e}")
-            return None
-
-    def _push_to_queue(self, queue_manager: ShardedQueueManager, pipeline_input: PipelineInput) -> bool:
-        """Push parsed pipeline input to queue.
+    def _push_to_queue(self, queue_manager: ShardedQueueManager, data) -> bool:
+        """Push data to pipeline queue (fast operation).
 
         Args:
             queue_manager: Queue manager for pipeline
-            pipeline_input: Parsed PipelineInput object
+            data: Either RawSocketData (unparsed) or List[torch.Tensor] (parsed)
 
         Returns:
             True if successful, False if backpressure
         """
         try:
-            # PipelineInput already uses efficient Ray ObjectRef storage internally
-            # Just push the PipelineInput object directly to queue
-            obj_ref = ray.put(pipeline_input)
+            # Single Ray object store operation for the entire data
+            obj_ref = ray.put(data)
 
             # Push to queue
             success = queue_manager.put(obj_ref)
             if success:
                 self.stats.batches_generated += 1
-                logging.debug(f"Producer {self.producer_id}: Pushed parsed batch {self.batch_counter}")
+                if hasattr(data, 'raw_bytes'):
+                    logging.debug(f"Producer {self.producer_id}: Pushed raw batch {self.batch_counter} ({len(data)} bytes)")
+                else:
+                    logging.debug(f"Producer {self.producer_id}: Pushed parsed batch {self.batch_counter} ({len(data)} tensors)")
                 return True
             else:
                 logging.warning(f"Producer {self.producer_id}: Queue full for batch {self.batch_counter}")
@@ -280,10 +295,11 @@ class LightweightSocketProducer:
         progress_interval: int = 10
     ) -> Dict[str, Any]:
         """
-        Main streaming loop: socket→parse→queue flow with HDF5 processing.
+        Main streaming loop: configurable socket→queue flow with optional parsing.
 
-        This method now performs HDF5 parsing in the producer stage (moved from GPU actors)
-        to eliminate parsing overhead from GPU actors and improve resource utilization.
+        Supports two parsing strategies (controlled by parse_location config):
+        1. "consumer" (Q1→P): Push raw bytes, let actor parse during GPU overlap (default)
+        2. "producer" (S→Q1): Parse in producer before queueing for comparison
 
         Args:
             queue_manager: Pipeline input queue manager
@@ -314,15 +330,19 @@ class LightweightSocketProducer:
                     logging.info(f"Producer {self.producer_id}: Socket closed/timeout, streaming completed normally")
                     break
 
-                # STEP 2: Parse HDF5 and create PipelineInput (moved from GPU actors)
-                pipeline_input = self._create_pipeline_input(raw_bytes)
-                if pipeline_input is None:
-                    # HDF5 parsing failed - skip this batch and continue
-                    logging.warning(f"Producer {self.producer_id}: Skipping batch due to parsing error")
-                    continue
+                # STEP 2: Process data based on parse_location config
+                if self.parse_location == "producer":
+                    # S→Q1 parsing: Parse immediately before queueing
+                    data = self._parse_raw_bytes(raw_bytes)
+                    if not data:  # Empty list means parsing failed
+                        logging.warning(f"Producer {self.producer_id}: Parsing failed for batch {self.batch_counter}, skipping")
+                        continue
+                else:
+                    # Q1→P parsing: Create minimal wrapper, defer parsing to consumer
+                    data = self._create_raw_socket_data(raw_bytes)
 
                 # STEP 3: Push to queue (fast Ray operation)
-                success = self._push_to_queue(queue_manager, pipeline_input)
+                success = self._push_to_queue(queue_manager, data)
                 if not success:
                     # Backpressure - wait briefly and retry
                     time.sleep(0.01)
@@ -380,11 +400,10 @@ class LightweightSocketProducer:
             'total_samples': self.stats.batches_generated,  # Expected by pipeline
             'packets_received': self.stats.packets_received,
             'bytes_received': self.stats.bytes_received,
-            'parsing_errors': self.stats.parsing_errors,
             'connection_retries': self.stats.connection_retries,
             'queue_errors': self.stats.queue_errors,
             'backpressure_events': 0,  # Expected by pipeline (lightweight producer doesn't track this)
-            'producer_type': 'lightweight_socket_with_parsing'
+            'producer_type': 'lightweight_socket'
         }
 
 
@@ -395,24 +414,51 @@ def create_lightweight_socket_producers(
 ) -> List[ray.ObjectRef]:
     """Create multiple lightweight socket producer actors.
 
+    Supports multi-socket configuration where each producer connects to a different socket.
+    If more producers than sockets, producers will cycle through available sockets.
+
     Args:
         num_producers: Number of producer actors to create
-        config: Data source configuration
+        config: Data source configuration with socket_addresses list
         deterministic: Use deterministic IDs for testing
 
     Returns:
         List of Ray actor references
+
+    Raises:
+        ValueError: If socket_addresses is not provided or empty for socket mode
     """
+    if config.socket_addresses is None or len(config.socket_addresses) == 0:
+        raise ValueError(
+            "socket_addresses must be provided for socket data source. "
+            "Example: socket_addresses: [['sdfada012', 12321]]"
+        )
+
+    num_sockets = len(config.socket_addresses)
+
+    if num_producers > num_sockets:
+        logging.warning(
+            f"num_producers ({num_producers}) > socket_addresses ({num_sockets}). "
+            f"Producers will cycle through available sockets."
+        )
+
     producers = []
     for i in range(num_producers):
+        # Cycle through addresses if more producers than sockets
+        address_idx = i % num_sockets
+        hostname, port = config.socket_addresses[address_idx]
+        socket_address = f"tcp://{hostname}:{port}"
+
         producer = LightweightSocketProducer.remote(
             producer_id=i,
             config=config,
+            socket_address=socket_address,
             deterministic=deterministic
         )
         producers.append(producer)
+        logging.info(f"Producer {i} → {socket_address}")
 
-    logging.info(f"Created {num_producers} lightweight socket producers")
+    logging.info(f"Created {num_producers} lightweight socket producers across {num_sockets} sockets")
     return producers
 
 

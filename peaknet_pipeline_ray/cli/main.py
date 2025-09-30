@@ -159,16 +159,8 @@ def create_parser() -> argparse.ArgumentParser:
         choices=['random', 'socket'],
         help='Data source type: random (synthetic data) or socket (from LCLStreamer)'
     )
-    data_source_group.add_argument(
-        '--socket-hostname',
-        type=str,
-        help='Socket hostname for data source (e.g., sdfada015)'
-    )
-    data_source_group.add_argument(
-        '--socket-port',
-        type=int,
-        help='Socket port for data source (default: 12321)'
-    )
+    # Note: socket_addresses must be configured in YAML file (supports multi-socket)
+    # CLI arguments --socket-hostname and --socket-port have been removed
     data_source_group.add_argument(
         '--socket-timeout',
         type=float,
@@ -280,10 +272,7 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
     # Data source overrides
     if hasattr(args, 'data_source') and args.data_source is not None:
         config.data_source.source_type = args.data_source
-    if hasattr(args, 'socket_hostname') and args.socket_hostname is not None:
-        config.data_source.socket_hostname = args.socket_hostname
-    if hasattr(args, 'socket_port') and args.socket_port is not None:
-        config.data_source.socket_port = args.socket_port
+    # Note: socket_hostname and socket_port CLI arguments removed in favor of YAML socket_addresses
     if hasattr(args, 'socket_timeout') and args.socket_timeout is not None:
         config.data_source.socket_timeout = args.socket_timeout
 
@@ -340,7 +329,15 @@ def main(argv: Optional[list] = None) -> int:
             print(f"  Data shape: {config.data.shape}")
             print(f"  Data source: {config.data_source.source_type}")
             if config.data_source.source_type == "socket":
-                print(f"  Socket: {config.data_source.socket_hostname}:{config.data_source.socket_port}")
+                if config.data_source.socket_addresses:
+                    num_sockets = len(config.data_source.socket_addresses)
+                    if num_sockets == 1:
+                        host, port = config.data_source.socket_addresses[0]
+                        print(f"  Socket: {host}:{port}")
+                    else:
+                        print(f"  Sockets: {num_sockets} addresses")
+                        for i, (host, port) in enumerate(config.data_source.socket_addresses):
+                            print(f"    [{i}] {host}:{port}")
                 print(f"  Note: total_samples parameter is ignored for socket data sources")
             print(f"  Min GPUs: {config.system.min_gpus}")
             print(f"  Profiling: {config.profiling.enable_profiling}")

@@ -578,6 +578,9 @@ class PeakNetPipeline:
                 pin_memory=self.config.system.pin_memory,
                 # Mixed precision configuration
                 precision_dtype=self.config.precision.dtype,
+                # Data source configuration for socket mode
+                serialization_format=self.config.data_source.serialization_format,
+                fields=self.config.data_source.fields,
             )
 
             if not self.config.output.quiet:
@@ -1183,19 +1186,23 @@ class PeakNetPipeline:
             List of producer actors
         """
         if self.config.data_source.source_type == "socket":
-            # Create multi-threaded socket producers for high-performance data ingestion
-            from .core.multithreaded_socket_producer import create_multithreaded_socket_producers
+            # Create lightweight socket producers for optimal CPU/GPU overlap
+            from .core.lightweight_socket_producer import create_lightweight_socket_producers
 
             if not self.config.output.quiet:
-                print(f"   Socket: {self.config.data_source.socket_hostname}:{self.config.data_source.socket_port}")
-                print(f"   Architecture: [Socket Thread] → [Raw Buffer] → [{self.config.data_source.internal_parser_threads} Parser Threads] → [Queue]")
-                print(f"   Performance: ~{self.config.data_source.internal_parser_threads}x parsing parallelism for GPU starvation elimination")
+                num_sockets = len(self.config.data_source.socket_addresses) if self.config.data_source.socket_addresses else 0
+                if num_sockets == 1:
+                    host, port = self.config.data_source.socket_addresses[0]
+                    print(f"   Socket: {host}:{port}")
+                else:
+                    print(f"   Sockets: {num_sockets} addresses, {runtime.num_producers} producers")
+                    for i, (host, port) in enumerate(self.config.data_source.socket_addresses):
+                        print(f"      [{i}] {host}:{port}")
+                print(f"   Optimization: Raw bytes → Pipeline parsing for zero gaps")
 
-            return create_multithreaded_socket_producers(
+            return create_lightweight_socket_producers(
                 num_producers=runtime.num_producers,
                 config=self.config.data_source,
-                internal_parser_threads=self.config.data_source.internal_parser_threads,
-                raw_buffer_size=self.config.data_source.raw_buffer_size,
                 deterministic=False
             )
         else:
