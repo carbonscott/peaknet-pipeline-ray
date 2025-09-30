@@ -1186,8 +1186,8 @@ class PeakNetPipeline:
             List of producer actors
         """
         if self.config.data_source.source_type == "socket":
-            # Create lightweight socket producers for optimal CPU/GPU overlap
-            from .core.lightweight_socket_producer import create_lightweight_socket_producers
+            # Create socket producers for optimal CPU/GPU overlap
+            from .core.socket_producer import create_socket_producers
 
             if not self.config.output.quiet:
                 num_sockets = len(self.config.data_source.socket_addresses) if self.config.data_source.socket_addresses else 0
@@ -1200,7 +1200,7 @@ class PeakNetPipeline:
                         print(f"      [{i}] {host}:{port}")
                 print(f"   Optimization: Raw bytes → Pipeline parsing for zero gaps")
 
-            return create_lightweight_socket_producers(
+            return create_socket_producers(
                 num_producers=runtime.num_producers,
                 config=self.config.data_source,
                 deterministic=False

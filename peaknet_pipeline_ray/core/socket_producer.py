@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Lightweight Socket Producer - Configurable Parsing for Performance Testing
+Socket Producer - Configurable Parsing for Performance Testing
 
 This producer supports two parsing strategies to compare throughput:
 
@@ -46,8 +46,8 @@ class RawSocketData:
 
 
 @dataclass
-class LightweightProducerStats:
-    """Minimal statistics for lightweight producer."""
+class SocketProducerStats:
+    """Minimal statistics for socket producer."""
     packets_received: int = 0
     bytes_received: int = 0
     batches_generated: int = 0
@@ -56,7 +56,7 @@ class LightweightProducerStats:
 
 
 @ray.remote
-class LightweightSocketProducer:
+class SocketProducer:
     """
     Ultra-fast socket producer that only handles raw bytes.
 
@@ -72,7 +72,7 @@ class LightweightSocketProducer:
         socket_address: str,
         deterministic: bool = False
     ):
-        """Initialize lightweight socket producer.
+        """Initialize socket producer.
 
         Args:
             producer_id: Unique identifier for this producer
@@ -94,13 +94,13 @@ class LightweightSocketProducer:
         self.fields = config.fields
 
         # Statistics tracking
-        self.stats = LightweightProducerStats()
+        self.stats = SocketProducerStats()
 
         # Batch tracking
         self.batch_counter = 0
 
         logging.info(
-            f"LightweightSocketProducer {producer_id} initialized: "
+            f"SocketProducer {producer_id} initialized: "
             f"socket={self.socket_address}, parse_location={self.parse_location}"
         )
 
@@ -311,7 +311,7 @@ class LightweightSocketProducer:
             Dictionary with production statistics
         """
         logging.info(
-            f"Producer {self.producer_id}: Starting lightweight streaming from {self.socket_address}"
+            f"Producer {self.producer_id}: Starting streaming from {self.socket_address}"
         )
 
         # Connect to socket
@@ -379,7 +379,7 @@ class LightweightSocketProducer:
         producer_id_str = f"producer_{self.producer_id}"
         ray.get(coordinator.register_producer_finished.remote(producer_id_str))
 
-        logging.info(f"Producer {self.producer_id}: Lightweight streaming completed")
+        logging.info(f"Producer {self.producer_id}: Streaming completed")
         return self._get_final_stats(success=True)
 
     def _get_final_stats(self, success: bool, error: Optional[str] = None) -> Dict[str, Any]:
@@ -402,17 +402,17 @@ class LightweightSocketProducer:
             'bytes_received': self.stats.bytes_received,
             'connection_retries': self.stats.connection_retries,
             'queue_errors': self.stats.queue_errors,
-            'backpressure_events': 0,  # Expected by pipeline (lightweight producer doesn't track this)
-            'producer_type': 'lightweight_socket'
+            'backpressure_events': 0,  # Expected by pipeline (socket producer doesn't track this)
+            'producer_type': 'socket'
         }
 
 
-def create_lightweight_socket_producers(
+def create_socket_producers(
     num_producers: int,
     config: DataSourceConfig,
     deterministic: bool = False
 ) -> List[ray.ObjectRef]:
-    """Create multiple lightweight socket producer actors.
+    """Create multiple socket producer actors.
 
     Supports multi-socket configuration where each producer connects to a different socket.
     If more producers than sockets, producers will cycle through available sockets.
@@ -449,7 +449,7 @@ def create_lightweight_socket_producers(
         hostname, port = config.socket_addresses[address_idx]
         socket_address = f"tcp://{hostname}:{port}"
 
-        producer = LightweightSocketProducer.remote(
+        producer = SocketProducer.remote(
             producer_id=i,
             config=config,
             socket_address=socket_address,
@@ -458,11 +458,11 @@ def create_lightweight_socket_producers(
         producers.append(producer)
         logging.info(f"Producer {i} → {socket_address}")
 
-    logging.info(f"Created {num_producers} lightweight socket producers across {num_sockets} sockets")
+    logging.info(f"Created {num_producers} socket producers across {num_sockets} sockets")
     return producers
 
 
 if __name__ == "__main__":
-    print("🚀 Lightweight Socket Producer")
+    print("🚀 Socket Producer")
     print("Ultra-fast socket→queue flow for zero-gap pipeline performance")
     print("HDF5 parsing moved to pipeline actors for CPU/GPU overlap")
