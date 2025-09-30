@@ -59,6 +59,7 @@ class SocketHDF5Producer:
         self,
         producer_id: int,
         config: DataSourceConfig,
+        socket_address: str,
         batch_size: int = 16,
         deterministic: bool = False
     ):
@@ -67,6 +68,7 @@ class SocketHDF5Producer:
         Args:
             producer_id: Unique identifier for this producer
             config: Data source configuration with socket and field mapping
+            socket_address: Socket address to connect to (e.g., "tcp://sdfada012:12321")
             batch_size: Number of samples per batch to create
             deterministic: Use deterministic batch IDs for testing
         """
@@ -80,7 +82,7 @@ class SocketHDF5Producer:
 
         # Socket connection
         self.socket = None
-        self.socket_address = f"tcp://{config.socket_hostname}:{config.socket_port}"
+        self.socket_address = socket_address
 
         # Batch assembly
         self.current_batch = []
@@ -528,24 +530,51 @@ def create_socket_hdf5_producers(
 ) -> List[ray.ObjectRef]:
     """Create multiple socket HDF5 producer actors.
 
+    Supports multi-socket configuration where each producer connects to a different socket.
+    If more producers than sockets, producers will cycle through available sockets.
+
     Args:
         num_producers: Number of producer actors to create
-        config: Data source configuration
+        config: Data source configuration with socket_addresses list
         batch_size: Batch size for each producer
         deterministic: Use deterministic IDs for testing
 
     Returns:
         List of Ray actor references
+
+    Raises:
+        ValueError: If socket_addresses is not provided or empty for socket mode
     """
+    if config.socket_addresses is None or len(config.socket_addresses) == 0:
+        raise ValueError(
+            "socket_addresses must be provided for socket data source. "
+            "Example: socket_addresses: [['sdfada012', 12321]]"
+        )
+
+    num_sockets = len(config.socket_addresses)
+
+    if num_producers > num_sockets:
+        logging.warning(
+            f"num_producers ({num_producers}) > socket_addresses ({num_sockets}). "
+            f"Producers will cycle through available sockets."
+        )
+
     producers = []
     for i in range(num_producers):
+        # Cycle through addresses if more producers than sockets
+        address_idx = i % num_sockets
+        hostname, port = config.socket_addresses[address_idx]
+        socket_address = f"tcp://{hostname}:{port}"
+
         producer = SocketHDF5Producer.remote(
             producer_id=i,
             config=config,
+            socket_address=socket_address,
             batch_size=batch_size,
             deterministic=deterministic
         )
         producers.append(producer)
+        logging.info(f"Producer {i} → {socket_address}")
 
-    logging.info(f"Created {num_producers} socket HDF5 producers")
+    logging.info(f"Created {num_producers} socket HDF5 producers across {num_sockets} sockets")
     return producers

@@ -589,3 +589,15 @@ TypeError: Attempting to call `get` on the value tensor([[[0.6346, 0.5324, 0.774
 (raylet) The target application terminated. One or more process it created re-parented.
 (raylet) Waiting for termination of re-parented processes.
 (raylet) Use the `--wait` option to modify this behavior.</text>
+
+---
+
+Actually, I will run the socket data producer myself, because it's on a node
+that you don't currently have access to, and thanks for confirming the pipeline
+is the same across two scenarios.
+
+Now, I'm suspecting whether having one socket is not good enough.  Please
+investigate whether the current code already supports pulling data from multiple
+sockets - if so, thenit's a matter of having the right configuration file,
+right?  Let's use two sockets as a starter example.  `sdfada012:12321` and
+`sdfada012:12322`.

@@ -69,6 +69,7 @@ class LightweightSocketProducer:
         self,
         producer_id: int,
         config: DataSourceConfig,
+        socket_address: str,
         deterministic: bool = False
     ):
         """Initialize lightweight socket producer.
@@ -76,6 +77,7 @@ class LightweightSocketProducer:
         Args:
             producer_id: Unique identifier for this producer
             config: Data source configuration with socket details
+            socket_address: Socket address to connect to (e.g., "tcp://sdfada012:12321")
             deterministic: Use deterministic batch IDs for testing
         """
         self.producer_id = producer_id
@@ -84,7 +86,7 @@ class LightweightSocketProducer:
 
         # Socket connection
         self.socket = None
-        self.socket_address = f"tcp://{config.socket_hostname}:{config.socket_port}"
+        self.socket_address = socket_address
 
         # Parsing configuration (extracted from config for convenience)
         self.parse_location = config.parse_location
@@ -412,24 +414,51 @@ def create_lightweight_socket_producers(
 ) -> List[ray.ObjectRef]:
     """Create multiple lightweight socket producer actors.
 
+    Supports multi-socket configuration where each producer connects to a different socket.
+    If more producers than sockets, producers will cycle through available sockets.
+
     Args:
         num_producers: Number of producer actors to create
-        config: Data source configuration
+        config: Data source configuration with socket_addresses list
         deterministic: Use deterministic IDs for testing
 
     Returns:
         List of Ray actor references
+
+    Raises:
+        ValueError: If socket_addresses is not provided or empty for socket mode
     """
+    if config.socket_addresses is None or len(config.socket_addresses) == 0:
+        raise ValueError(
+            "socket_addresses must be provided for socket data source. "
+            "Example: socket_addresses: [['sdfada012', 12321]]"
+        )
+
+    num_sockets = len(config.socket_addresses)
+
+    if num_producers > num_sockets:
+        logging.warning(
+            f"num_producers ({num_producers}) > socket_addresses ({num_sockets}). "
+            f"Producers will cycle through available sockets."
+        )
+
     producers = []
     for i in range(num_producers):
+        # Cycle through addresses if more producers than sockets
+        address_idx = i % num_sockets
+        hostname, port = config.socket_addresses[address_idx]
+        socket_address = f"tcp://{hostname}:{port}"
+
         producer = LightweightSocketProducer.remote(
             producer_id=i,
             config=config,
+            socket_address=socket_address,
             deterministic=deterministic
         )
         producers.append(producer)
+        logging.info(f"Producer {i} → {socket_address}")
 
-    logging.info(f"Created {num_producers} lightweight socket producers")
+    logging.info(f"Created {num_producers} lightweight socket producers across {num_sockets} sockets")
     return producers
 
 

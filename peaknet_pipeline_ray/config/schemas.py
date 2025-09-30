@@ -1,7 +1,7 @@
 """Configuration schemas for PeakNet Pipeline using dataclasses."""
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import yaml
 from pathlib import Path
 
@@ -46,9 +46,12 @@ class DataSourceConfig:
     """Configuration for data source (random or socket)."""
     source_type: str = "random"  # "random" or "socket"
 
-    # Socket configuration
-    socket_hostname: str = "localhost"
-    socket_port: int = 12321
+    # Multi-socket configuration (REQUIRED for socket mode)
+    # List of (hostname, port) tuples for socket sources
+    # Single socket example: [("sdfada012", 12321)]
+    # Multi-socket example: [("sdfada012", 12321), ("sdfada012", 12322)]
+    socket_addresses: Optional[List[Tuple[str, int]]] = None
+
     socket_timeout: float = 10.0
     socket_retry_attempts: int = 3
 
@@ -198,8 +201,7 @@ class PipelineConfig:
             },
             'data_source': {
                 'source_type': self.data_source.source_type,
-                'socket_hostname': self.data_source.socket_hostname,
-                'socket_port': self.data_source.socket_port,
+                'socket_addresses': self.data_source.socket_addresses,
                 'socket_timeout': self.data_source.socket_timeout,
                 'socket_retry_attempts': self.data_source.socket_retry_attempts,
                 'shape': list(self.data_source.shape) if self.data_source.shape else None,

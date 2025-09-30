@@ -1190,7 +1190,14 @@ class PeakNetPipeline:
             from .core.lightweight_socket_producer import create_lightweight_socket_producers
 
             if not self.config.output.quiet:
-                print(f"   Socket: {self.config.data_source.socket_hostname}:{self.config.data_source.socket_port}")
+                num_sockets = len(self.config.data_source.socket_addresses) if self.config.data_source.socket_addresses else 0
+                if num_sockets == 1:
+                    host, port = self.config.data_source.socket_addresses[0]
+                    print(f"   Socket: {host}:{port}")
+                else:
+                    print(f"   Sockets: {num_sockets} addresses, {runtime.num_producers} producers")
+                    for i, (host, port) in enumerate(self.config.data_source.socket_addresses):
+                        print(f"      [{i}] {host}:{port}")
                 print(f"   Optimization: Raw bytes → Pipeline parsing for zero gaps")
 
             return create_lightweight_socket_producers(
