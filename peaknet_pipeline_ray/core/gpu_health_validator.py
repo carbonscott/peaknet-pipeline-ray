@@ -190,7 +190,6 @@ def configure_cuda_for_healthy_gpus(healthy_gpu_ids: List[int]) -> bool:
     # Note: CUDA context verification will happen in child processes
     # PyTorch/CUDA needs to be restarted to see the new CUDA_VISIBLE_DEVICES
     logging.info(f"✅ CUDA_VISIBLE_DEVICES configured - child processes will see {len(healthy_gpu_ids)} GPUs")
-    logging.warning("Note: Current process may still see old GPU layout - child processes will see new layout")
     return True
 
 

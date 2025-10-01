@@ -957,8 +957,6 @@ class PeakNetPipeline:
         """Print streaming pipeline banner."""
         print("🌊 Ray Multi-GPU PeakNet STREAMING Pipeline")
         print("=" * 55)
-        print("🚀 TRUE CONTINUOUS STREAMING - No batch accumulation!")
-        print("🔄 Preserves double buffering - No per-batch sync!")
         print()
 
         if self.config.output.verbose:
@@ -1104,9 +1102,6 @@ class PeakNetPipeline:
         # Step 5: Monitor and Wait for Completion
         if not self.config.output.quiet:
             print("⏳ Step 5: Streaming Processing (Real-time)")
-            print("   📊 Producers generating data...")
-            print("   ⚡ Actors processing continuously...")
-            print("   🔄 Double buffering preserved - no per-batch sync!")
 
         start_time = time.time()
 
