@@ -25,16 +25,15 @@ model:
 
       # Other settings
       from_scratch: false
-  warmup_iterations: 100  # 100 iterations for torch.compile warmup
+  warmup_iterations: 500  # 100 iterations for torch.compile warmup
 
 runtime:
   max_actors: 4           # Multi-GPU profiling
-  batch_size: 16          # Reasonable for large images
+  batch_size: 32          # Reasonable for large images
   num_producers: 2        # Multiple producers for parallel random data generation
   batches_per_producer: 32 # Batches per producer - total batches = num_producers * batches_per_producer
-  total_samples: 1600    # Total samples to generate (overrides batches_per_producer calculation if set)
+  total_samples: 16000    # Total samples to generate (overrides batches_per_producer calculation if set)
   inter_batch_delay: 0.01 # Moderate streaming rate
-  memory_sync_interval: 100  # Sync every 100 batches for memory management (0=disable)
   queue_num_shards: 4
   queue_maxsize_per_shard: 2000
 
@@ -50,7 +49,7 @@ data_source:
 
 # NEW: Mixed precision configuration for inference performance
 precision:
-  dtype: "float32"         # Precision type: "float32", "bfloat16", "float16"
+  dtype: "bfloat16"         # Precision type: "float32", "bfloat16", "float16"
                             # Autocast is automatically used for CUDA devices with bfloat16/float16
 system:
   min_gpus: 1             # Minimum GPUs required
