@@ -419,8 +419,10 @@ class PeakNetPipeline:
         if system.min_gpus <= 0:
             raise ValueError("min_gpus must be positive")
 
-        if runtime.num_producers <= 0:
-            raise ValueError("num_producers must be positive")
+        # Only validate num_producers for non-socket modes (socket mode auto-infers from socket_addresses)
+        if self.config.data_source.source_type != "socket":
+            if runtime.num_producers is None or runtime.num_producers <= 0:
+                raise ValueError("num_producers must be positive for non-socket data sources")
 
         if runtime.batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -443,7 +445,8 @@ class PeakNetPipeline:
             print(f"Configuration summary:")
             print(f"  Model: PeakNet (weights: {self.config.model.weights_path is not None})")
             print(f"  Data: {self.config.data.shape} tensor shape")
-            print(f"  Runtime: {self.config.runtime.batch_size} batch size, {self.config.runtime.num_producers} producers")
+            num_producers_str = "auto" if self.config.runtime.num_producers is None else str(self.config.runtime.num_producers)
+            print(f"  Runtime: {self.config.runtime.batch_size} batch size, {num_producers_str} producers")
             print(f"  System: min {self.config.system.min_gpus} GPUs required")
             print()
 
@@ -810,7 +813,8 @@ class PeakNetPipeline:
             print(f"\n⚙️  Configuration Used:")
             print(f"   Actor limit: {'auto-scale' if runtime.max_actors is None else runtime.max_actors}")
             print(f"   Min GPUs required: {self.config.system.min_gpus}")
-            print(f"   Producers: {runtime.num_producers}")
+            num_producers_str = "auto" if runtime.num_producers is None else str(runtime.num_producers)
+            print(f"   Producers: {num_producers_str}")
             print(f"   Batch size: {runtime.batch_size}")
             print(f"   Input shape: {data.shape}")
             print(f"   Inter-batch delay: {runtime.inter_batch_delay}s")
@@ -961,7 +965,8 @@ class PeakNetPipeline:
             print(f"Configuration:")
             print(f"  Model: PeakNet (weights: {self.config.model.weights_path is not None})")
             print(f"  Data: {self.config.data.shape} tensor shape")
-            print(f"  Runtime: {self.config.runtime.batch_size} batch size, {self.config.runtime.num_producers} producers")
+            num_producers_str = "auto" if self.config.runtime.num_producers is None else str(self.config.runtime.num_producers)
+            print(f"  Runtime: {self.config.runtime.batch_size} batch size, {num_producers_str} producers")
             print(f"  System: min {self.config.system.min_gpus} GPUs required")
             print()
 
@@ -982,12 +987,14 @@ class PeakNetPipeline:
         runtime = self.config.runtime
         data = self.config.data
 
-        # For socket sources, ignore total_samples and stream indefinitely
+        # Determine actual producer count (socket mode auto-infers from socket_addresses)
         if self.config.data_source.source_type == "socket":
+            actual_num_producers = len(self.config.data_source.socket_addresses) if self.config.data_source.socket_addresses else 0
             batches_per_producer = None  # Stream until socket closes
             total_expected_batches = None  # Unknown for streaming
             total_expected_samples = None  # Unknown for streaming
         else:
+            actual_num_producers = runtime.num_producers
             # Calculate finite batches for non-socket sources
             if runtime.total_samples is not None:
                 total_batches_needed = (runtime.total_samples + runtime.batch_size - 1) // runtime.batch_size
@@ -1001,7 +1008,7 @@ class PeakNetPipeline:
             total_expected_samples = total_expected_batches * runtime.batch_size
 
         if not self.config.output.quiet:
-            print(f"   Producers: {runtime.num_producers}")
+            print(f"   Producers: {actual_num_producers}")
             print(f"   Actors: {len(actors)}")
             if self.config.data_source.source_type == "socket":
                 print(f"   Batches per producer: unlimited (stream until socket closes)")
@@ -1017,7 +1024,7 @@ class PeakNetPipeline:
             print("\n📡 Step 1: Creating Streaming Coordinator")
 
         coordinator = create_streaming_coordinator(
-            expected_producers=runtime.num_producers,
+            expected_producers=actual_num_producers,
             expected_actors=len(actors)
         )
 
@@ -1195,7 +1202,7 @@ class PeakNetPipeline:
                     host, port = self.config.data_source.socket_addresses[0]
                     print(f"   Socket: {host}:{port}")
                 else:
-                    print(f"   Sockets: {num_sockets} addresses, {runtime.num_producers} producers")
+                    print(f"   Sockets: {num_sockets} addresses (1 producer per socket)")
                     for i, (host, port) in enumerate(self.config.data_source.socket_addresses):
                         print(f"      [{i}] {host}:{port}")
                 print(f"   Optimization: Raw bytes → Pipeline parsing for zero gaps")

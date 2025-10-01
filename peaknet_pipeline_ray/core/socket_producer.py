@@ -414,11 +414,12 @@ def create_socket_producers(
 ) -> List[ray.ObjectRef]:
     """Create multiple socket producer actors.
 
-    Supports multi-socket configuration where each producer connects to a different socket.
-    If more producers than sockets, producers will cycle through available sockets.
+    In socket mode, num_producers parameter is IGNORED - the function always creates
+    one producer per socket address (1:1 mapping). This eliminates configuration
+    redundancy and prevents mismatches.
 
     Args:
-        num_producers: Number of producer actors to create
+        num_producers: Ignored in socket mode (kept for API compatibility)
         config: Data source configuration with socket_addresses list
         deterministic: Use deterministic IDs for testing
 
@@ -434,19 +435,18 @@ def create_socket_producers(
             "Example: socket_addresses: [['sdfada012', 12321]]"
         )
 
+    # Socket mode: Always create 1 producer per socket (ignore num_producers parameter)
     num_sockets = len(config.socket_addresses)
+    actual_num_producers = num_sockets
 
-    if num_producers > num_sockets:
-        logging.warning(
-            f"num_producers ({num_producers}) > socket_addresses ({num_sockets}). "
-            f"Producers will cycle through available sockets."
-        )
+    logging.info(
+        f"Socket mode: Creating {actual_num_producers} producer(s) "
+        f"(1 per socket, num_producers parameter ignored)"
+    )
 
     producers = []
-    for i in range(num_producers):
-        # Cycle through addresses if more producers than sockets
-        address_idx = i % num_sockets
-        hostname, port = config.socket_addresses[address_idx]
+    for i in range(actual_num_producers):
+        hostname, port = config.socket_addresses[i]
         socket_address = f"tcp://{hostname}:{port}"
 
         producer = SocketProducer.remote(
@@ -458,7 +458,7 @@ def create_socket_producers(
         producers.append(producer)
         logging.info(f"Producer {i} → {socket_address}")
 
-    logging.info(f"Created {num_producers} socket producers across {num_sockets} sockets")
+    logging.info(f"Created {actual_num_producers} socket producer(s) for {num_sockets} socket(s)")
     return producers
 
 
