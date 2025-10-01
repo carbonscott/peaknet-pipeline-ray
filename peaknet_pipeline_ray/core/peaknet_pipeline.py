@@ -288,7 +288,10 @@ class DoubleBufferedPipeline:
 
                 # Direct copy - no preprocessing (producer responsible for correct input shape)
                 for i in range(current_batch_size):
-                    gpu_buffer[i].copy_(cpu_batch[i], non_blocking=True)
+                    # Lazy pin: only if not already pinned (prevents exhaustion, enables async H2D)
+                    tensor = cpu_batch[i] if cpu_batch[i].is_pinned() else cpu_batch[i].pin_memory()
+                    gpu_buffer[i].copy_(tensor, non_blocking=True)
+                    # tensor freed immediately by GC (short lifetime = no exhaustion)
 
                 # Record H2D completion event for this specific buffer
                 self.h2d_stream.record_event(h2d_event)
