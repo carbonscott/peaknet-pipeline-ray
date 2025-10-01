@@ -6,12 +6,12 @@ A package for running PeakNet segmentation model inference at scale using Ray (e
 
 1. Start Ray head node:
 ```bash
-ray start --head --block
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9 ray start --head --block
 ```
 
 2. In another terminal, run PeakNet pipeline with profiling enabled:
 ```bash
-peaknet-pipeline --config examples/configs/peaknet.yaml --max-actors 4 --total-samples 10240 --verbose
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9 peaknet-pipeline --config examples/configs/peaknet.yaml --max-actors 4 --total-samples 10240 --verbose
 ```
 
 This will generate NSys profiling data in `$TMPDIR/ray/session_latest/logs/nsight/` showing actual PeakNet GPU kernel execution.
