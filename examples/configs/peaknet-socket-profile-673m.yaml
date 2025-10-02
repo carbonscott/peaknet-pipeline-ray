@@ -6,9 +6,8 @@
 # - Finite (total_samples: N): Process exactly N samples then stop
 
 model:
-  weights_path: null  # No weights = randomly initialized model (but REAL GPU computation!)
+  weights_path: /sdf/data/lcls/ds/prj/prjcwang31/results/proj-stream-to-ml/peaknet-673m.bin  # PeakNet-673M pretrained weights
 
-  # Simplified PeakNet configuration - no complex nested structures
   peaknet_config:
     model:
       # Basic model parameters
@@ -16,16 +15,17 @@ model:
       num_channels: 1
       num_classes: 2
 
-      # Backbone configuration
-      backbone_hidden_sizes: [96, 192, 384, 768]
-      backbone_depths: [3, 3, 9, 3]
+      # Backbone configuration (PeakNet-673M)
+      backbone_hidden_sizes: [352, 704, 1408, 2816]
+      backbone_depths: [3, 3, 27, 3]
 
-      # BiFPN configuration
-      bifpn_num_blocks: 2
-      bifpn_num_features: 256
+      # BiFPN configuration (PeakNet-673M)
+      bifpn_num_blocks: 4
+      bifpn_num_features: 512
 
       # Segmentation head configuration
       seg_out_channels: 256
+      uses_learned_upsample: true  # Required for PeakNet-673M pretrained weights
 
       # Other settings
       from_scratch: false
@@ -33,7 +33,7 @@ model:
 
 runtime:
   max_actors: 4           # Multi-GPU profiling
-  batch_size: 16          # Reasonable for large images
+  batch_size: 8          # Reasonable for large images
   num_producers: null        # Used in random mode only; ignored in socket mode (auto-inferred from socket_addresses)
   total_samples: null     # null = continuous processing until stream ends (recommended for socket sources)
                           # Set to positive integer for finite processing (e.g., 20480 for testing)
@@ -46,8 +46,6 @@ runtime:
 
 data:
   shape: [1, 1920, 1920]  # Full resolution as requested (channels inferred from shape[0])
-
-# Transforms removed - preprocessing handled by producer before socket transmission
 
 # Data source configuration for socket streaming
 data_source:
