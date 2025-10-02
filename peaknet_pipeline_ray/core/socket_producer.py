@@ -34,15 +34,30 @@ logging.basicConfig(level=logging.INFO)
 
 @dataclass
 class RawSocketData:
-    """Lightweight wrapper for raw socket bytes with minimal metadata."""
-    raw_bytes: bytes
+    """Lightweight wrapper for raw socket bytes with minimal metadata.
+
+    Used when parse_location="consumer" - stores raw bytes as ObjectRef.
+    """
+    raw_bytes_ref: ray.ObjectRef  # ObjectRef to raw bytes
+    timestamp: float
+    producer_id: int
+    batch_id: str
+
+
+@dataclass
+class ParsedSocketData:
+    """Wrapper for pre-parsed tensors with ObjectRefs to prevent GC.
+
+    Used when parse_location="producer" - stores parsed tensors as ObjectRefs.
+    """
+    tensor_refs: List[ray.ObjectRef]  # List of ObjectRefs to individual tensors
     timestamp: float
     producer_id: int
     batch_id: str
 
     def __len__(self):
-        """Return size of raw data for monitoring."""
-        return len(self.raw_bytes)
+        """Return number of tensors."""
+        return len(self.tensor_refs)
 
 
 @dataclass
@@ -53,6 +68,7 @@ class SocketProducerStats:
     batches_generated: int = 0
     connection_retries: int = 0
     queue_errors: int = 0
+    backpressure_events: int = 0
 
 
 @ray.remote
@@ -140,12 +156,12 @@ class SocketProducer:
             logging.error(f"Producer {self.producer_id}: Socket receive error: {e}")
             return None
 
-    def _parse_raw_bytes(self, raw_bytes: bytes) -> List:
+    def _parse_raw_bytes(self, raw_bytes: bytes) -> ParsedSocketData:
         """
-        Parse raw socket bytes into list of tensors for producer-side parsing.
+        Parse raw socket bytes and wrap in ParsedSocketData with ObjectRefs.
 
-        This method executes the same parsing logic as the actor's _parse_raw_socket_data()
-        but runs in the producer (S→Q1 stage) instead of the consumer (Q1→P stage).
+        This method executes parsing in the producer (S→Q1 stage) and wraps
+        tensors in ObjectRefs to prevent GC during queue backpressure.
 
         Supports two serialization formats:
         - NumPy .npz format (fast, recommended): Uses np.load() for simple dictionary access
@@ -155,7 +171,7 @@ class SocketProducer:
             raw_bytes: Raw bytes from socket containing detector data in (B, C, H, W) format
 
         Returns:
-            List of torch tensors, each with shape (C, H, W) ready for pipeline processing
+            ParsedSocketData with tensor ObjectRefs
         """
         from io import BytesIO
         import numpy as np
@@ -224,17 +240,31 @@ class SocketProducer:
                 f"each with shape {cpu_tensors[0].shape if cpu_tensors else 'empty'}"
             )
 
-            return cpu_tensors
+            # Create ObjectRefs for each tensor ONCE
+            tensor_refs = [ray.put(tensor) for tensor in cpu_tensors]
+
+            # Create batch ID
+            if self.deterministic:
+                batch_id = f"producer_{self.producer_id}_batch_{self.batch_counter}"
+            else:
+                batch_id = f"producer_{self.producer_id}_{uuid.uuid4().hex[:8]}"
+
+            return ParsedSocketData(
+                tensor_refs=tensor_refs,
+                timestamp=time.time(),
+                producer_id=self.producer_id,
+                batch_id=batch_id
+            )
 
         except Exception as e:
             logging.error(f"Producer {self.producer_id}: Failed to parse raw bytes: {e}")
             import traceback
             logging.error(traceback.format_exc())
-            # Return empty list as fallback
-            return []
+            # Return None to signal parsing failure
+            return None
 
     def _create_raw_socket_data(self, raw_bytes: bytes) -> RawSocketData:
-        """Create minimal wrapper for raw bytes (ultra-fast).
+        """Create wrapper with ObjectRef to raw bytes.
 
         Args:
             raw_bytes: Raw HDF5 data from socket
@@ -248,44 +278,15 @@ class SocketProducer:
         else:
             batch_id = f"producer_{self.producer_id}_{uuid.uuid4().hex[:8]}"
 
+        # Create ObjectRef ONCE for these bytes (prevents GC during retry)
+        raw_bytes_ref = ray.put(raw_bytes)
+
         return RawSocketData(
-            raw_bytes=raw_bytes,
+            raw_bytes_ref=raw_bytes_ref,
             timestamp=time.time(),
             producer_id=self.producer_id,
             batch_id=batch_id
         )
-
-    def _push_to_queue(self, queue_manager: ShardedQueueManager, data) -> bool:
-        """Push data to pipeline queue (fast operation).
-
-        Args:
-            queue_manager: Queue manager for pipeline
-            data: Either RawSocketData (unparsed) or List[torch.Tensor] (parsed)
-
-        Returns:
-            True if successful, False if backpressure
-        """
-        try:
-            # Single Ray object store operation for the entire data
-            obj_ref = ray.put(data)
-
-            # Push to queue
-            success = queue_manager.put(obj_ref)
-            if success:
-                self.stats.batches_generated += 1
-                if hasattr(data, 'raw_bytes'):
-                    logging.debug(f"Producer {self.producer_id}: Pushed raw batch {self.batch_counter} ({len(data)} bytes)")
-                else:
-                    logging.debug(f"Producer {self.producer_id}: Pushed parsed batch {self.batch_counter} ({len(data)} tensors)")
-                return True
-            else:
-                logging.warning(f"Producer {self.producer_id}: Queue full for batch {self.batch_counter}")
-                return False
-
-        except Exception as e:
-            self.stats.queue_errors += 1
-            logging.error(f"Producer {self.producer_id}: Failed to push to queue: {e}")
-            return False
 
     def stream_raw_bytes_to_queue(
         self,
@@ -334,19 +335,29 @@ class SocketProducer:
                 if self.parse_location == "producer":
                     # S→Q1 parsing: Parse immediately before queueing
                     data = self._parse_raw_bytes(raw_bytes)
-                    if not data:  # Empty list means parsing failed
+                    if data is None:  # None means parsing failed
                         logging.warning(f"Producer {self.producer_id}: Parsing failed for batch {self.batch_counter}, skipping")
                         continue
                 else:
                     # Q1→P parsing: Create minimal wrapper, defer parsing to consumer
                     data = self._create_raw_socket_data(raw_bytes)
 
-                # STEP 3: Push to queue (fast Ray operation)
-                success = self._push_to_queue(queue_manager, data)
-                if not success:
-                    # Backpressure - wait briefly and retry
-                    time.sleep(0.01)
-                    continue
+                # STEP 3: Push to queue directly with backpressure retry (NO extra ray.put()!)
+                backoff_delay = 0.001  # Start with 1ms delay
+                while True:
+                    success = queue_manager.put(data)  # Direct put - data already contains ObjectRefs!
+                    if success:
+                        self.stats.batches_generated += 1
+                        logging.debug(
+                            f"Producer {self.producer_id}: Pushed batch {self.batch_counter} "
+                            f"({len(data)} {'tensors' if isinstance(data, ParsedSocketData) else 'bytes'})"
+                        )
+                        break
+
+                    # Queue full - retry with same data (small wrapper stays alive → ObjectRefs preserved)
+                    self.stats.backpressure_events += 1
+                    time.sleep(min(backoff_delay, 0.01))
+                    backoff_delay = min(backoff_delay * 1.5, 0.01)  # Exponential backoff up to 10ms
 
                 self.batch_counter += 1
 
@@ -402,7 +413,7 @@ class SocketProducer:
             'bytes_received': self.stats.bytes_received,
             'connection_retries': self.stats.connection_retries,
             'queue_errors': self.stats.queue_errors,
-            'backpressure_events': 0,  # Expected by pipeline (socket producer doesn't track this)
+            'backpressure_events': self.stats.backpressure_events,
             'producer_type': 'socket'
         }
 

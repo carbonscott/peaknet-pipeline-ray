@@ -433,7 +433,11 @@ class PeakNetPipelineActorBase:
                     self.pipeline.swap()
 
                 # Extract data from different sources
-                if hasattr(batch_data, 'raw_bytes'):
+                if hasattr(batch_data, 'tensor_refs'):
+                    # Producer-side parsing (parse_location="producer")
+                    # ParsedSocketData - tensors already parsed, dereference ObjectRefs
+                    cpu_tensors = ray.get(batch_data.tensor_refs)
+                elif hasattr(batch_data, 'raw_bytes_ref'):
                     # Consumer-side parsing (parse_location="consumer")
                     # RawSocketData - parse during GPU overlap (Q1→P stage)
                     cpu_tensors = self._parse_raw_socket_data(batch_data)
@@ -445,9 +449,7 @@ class PeakNetPipelineActorBase:
                 elif isinstance(batch_data, list):
                     # Check if list contains tensors or ObjectRefs
                     if len(batch_data) > 0 and isinstance(batch_data[0], torch.Tensor):
-                        # Producer-side parsing (parse_location="producer")
-                        # Pre-parsed tensors from producer (S→Q1 stage)
-                        # Ray auto-dereferenced the ObjectRef when retrieved from queue
+                        # Legacy producer-side parsing - tensors directly in list
                         cpu_tensors = batch_data
                     else:
                         # Legacy: list of ObjectRefs - dereference them
@@ -564,8 +566,8 @@ class PeakNetPipelineActorBase:
         which is extracted into individual (C, H, W) tensors for the pipeline.
 
         Args:
-            raw_socket_data: RawSocketData object with raw bytes containing
-                           detector data in (B, C, H, W) format
+            raw_socket_data: RawSocketData object with raw_bytes_ref ObjectRef
+                           containing detector data in (B, C, H, W) format
 
         Returns:
             List of torch tensors, each with shape (C, H, W) ready for pipeline processing
@@ -574,12 +576,15 @@ class PeakNetPipelineActorBase:
         import numpy as np
 
         try:
+            # Dereference the raw bytes ObjectRef (prevents GC during parsing)
+            raw_bytes = ray.get(raw_socket_data.raw_bytes_ref)
+
             # Determine serialization format from actor configuration
             serialization_format = self.serialization_format
 
             if serialization_format == "numpy":
                 # Fast NumPy .npz parsing (3-7x faster than HDF5)
-                arrays = np.load(BytesIO(raw_socket_data.raw_bytes))
+                arrays = np.load(BytesIO(raw_bytes))
 
                 # Extract detector data using field mapping from actor configuration
                 detector_data_key = self.fields.get("detector_data", "data")
@@ -595,7 +600,7 @@ class PeakNetPipelineActorBase:
                 import h5py
                 import hdf5plugin
 
-                with h5py.File(BytesIO(raw_socket_data.raw_bytes), 'r') as h5_file:
+                with h5py.File(BytesIO(raw_bytes), 'r') as h5_file:
                     detector_data_path = self.fields.get("detector_data", "/data/data")
 
                     if detector_data_path in h5_file:
