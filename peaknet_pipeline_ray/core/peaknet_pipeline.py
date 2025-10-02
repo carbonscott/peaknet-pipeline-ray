@@ -171,11 +171,11 @@ def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_mode=None
 
         # Add torch.compile if requested and available
         if compile_mode is not None and check_torch_compile_available():
-            print(f"Compiling PeakNet model with mode={compile_mode}...")
+            print(f"Enabling torch.compile with mode={compile_mode}...")
             try:
                 # Use specified compilation mode
                 peaknet_model = torch.compile(peaknet_model, mode=compile_mode)
-                print(f"Model compilation successful (mode={compile_mode})")
+                print(f"torch.compile enabled (mode={compile_mode})")
             except Exception as e:
                 print(f"Warning: Model compilation failed with mode={compile_mode} ({e}), using non-compiled model")
         elif compile_mode is not None and not check_torch_compile_available():

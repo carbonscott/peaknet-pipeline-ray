@@ -155,7 +155,7 @@ class PeakNetPipelineActorBase:
             if compile_mode is not None:
                 try:
                     self.peaknet_model = torch.compile(self.peaknet_model, mode=compile_mode)
-                    logging.info(f"Model compilation successful (mode={compile_mode})")
+                    logging.info(f"torch.compile enabled (mode={compile_mode})")
                 except Exception as e:
                     logging.warning(f"Model compilation failed: {e}")
         else:
