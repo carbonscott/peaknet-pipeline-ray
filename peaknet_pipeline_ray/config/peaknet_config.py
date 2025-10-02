@@ -78,6 +78,7 @@ class SimplePeakNetConfig:
 
     # Segmentation head configuration
     seg_out_channels: int = 256
+    uses_learned_upsample: bool = False
 
     # Other model settings
     from_scratch: bool = False
@@ -138,7 +139,7 @@ class SimplePeakNetConfig:
             num_groups=32,
             out_channels=self.seg_out_channels,
             base_scale_factor=2.0,
-            uses_learned_upsample=False,
+            uses_learned_upsample=self.uses_learned_upsample,
             up_scale_factor=[4, 8, 16, 32]
         )
 
@@ -164,5 +165,6 @@ def create_peaknet_config_from_dict(config_dict: Dict[str, Any]) -> SimplePeakNe
         bifpn_num_blocks=config_dict.get('bifpn_num_blocks', 2),
         bifpn_num_features=config_dict.get('bifpn_num_features', 256),
         seg_out_channels=config_dict.get('seg_out_channels', 256),
+        uses_learned_upsample=config_dict.get('uses_learned_upsample', False),
         from_scratch=config_dict.get('from_scratch', False)
     )
