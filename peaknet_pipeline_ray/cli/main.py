@@ -89,7 +89,7 @@ def create_parser() -> argparse.ArgumentParser:
     runtime_group.add_argument(
         '--memory-sync-interval',
         type=int,
-        help='Sync every N batches for memory management (0=disable, default: 100)'
+        help='Sync every N batches for memory management (0=disable, default: 0)'
     )
     runtime_group.add_argument(
         '--queue-shards',

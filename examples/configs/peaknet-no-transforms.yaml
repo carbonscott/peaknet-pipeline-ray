@@ -33,7 +33,7 @@ runtime:
   batches_per_producer: 32 # 32 * 8 producers = 256 batches total
   total_samples: 4096     # Sufficient for profiling (reduced for initial test)
   inter_batch_delay: 0.01 # Moderate streaming rate
-  memory_sync_interval: 100  # Sync every 100 batches for memory management (0=disable)
+  memory_sync_interval: 0  # Sync every N batches for memory management (0=disable)
 
 data:
   shape: [1, 1920, 1920]  # Full resolution as requested (channels inferred from shape[0])

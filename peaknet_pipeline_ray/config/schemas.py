@@ -26,7 +26,7 @@ class RuntimeConfig:
     batches_per_producer: int = 5
     inter_batch_delay: float = 0.1
     # Memory management configuration
-    memory_sync_interval: int = 100  # Sync every N batches for memory management (0=disable)
+    memory_sync_interval: int = 0  # Sync every N batches for memory management (0=disable)
     # Queue configuration
     queue_num_shards: int = 4  # Number of queue shards for parallel access
     queue_maxsize_per_shard: int = 100  # Maximum items per shard (total capacity = shards * maxsize)

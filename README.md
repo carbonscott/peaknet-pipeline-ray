@@ -62,14 +62,14 @@ peaknet-pipeline --config examples/configs/peaknet.yaml --compile-mode default -
 The pipeline performs periodic GPU memory synchronization to prevent memory leaks during long-running inference:
 
 ```bash
-# Default: sync every 100 batches
+# Default: disabled (maximum performance)
 peaknet-pipeline --config config.yaml
+
+# Custom interval: sync every 100 batches
+peaknet-pipeline --config config.yaml --memory-sync-interval 100
 
 # Custom interval: sync every 500 batches
 peaknet-pipeline --config config.yaml --memory-sync-interval 500
-
-# Disable periodic sync (maximum performance, monitor memory usage)
-peaknet-pipeline --config config.yaml --memory-sync-interval 0
 ```
 
 **Performance Impact:** Synchronization occurs very infrequently and has minimal impact on throughput.
