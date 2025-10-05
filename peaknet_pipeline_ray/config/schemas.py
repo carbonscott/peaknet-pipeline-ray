@@ -17,6 +17,13 @@ class ModelConfig:
 
 
 @dataclass
+class QueueNamesConfig:
+    """Configuration for queue names in the pipeline."""
+    input_queue: str = "peaknet_q1"   # Q1: Data producer → Inference actors
+    output_queue: str = "peaknet_q2"  # Q2: Inference actors → Post-processor
+
+
+@dataclass
 class RuntimeConfig:
     """Runtime configuration for pipeline execution."""
     max_actors: Optional[int] = None  # Auto-scale to available GPUs
@@ -30,6 +37,7 @@ class RuntimeConfig:
     # Queue configuration
     queue_num_shards: int = 4  # Number of queue shards for parallel access
     queue_maxsize_per_shard: int = 100  # Maximum items per shard (total capacity = shards * maxsize)
+    queue_names: QueueNamesConfig = field(default_factory=QueueNamesConfig)  # Queue naming configuration
     # Coordination timing configuration
     max_empty_polls: int = 20  # Check coordinator after N consecutive empty polls
     poll_timeout: float = 0.01  # Timeout for queue polling in seconds
@@ -120,6 +128,12 @@ class OutputConfig:
 
 
 @dataclass
+class RayConfig:
+    """Configuration for Ray cluster connection and namespacing."""
+    namespace: str = "peaknet-pipeline"  # Named namespace for actor discovery
+
+
+@dataclass
 class PipelineConfig:
     """Main pipeline configuration container."""
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -130,6 +144,7 @@ class PipelineConfig:
     system: SystemConfig = field(default_factory=SystemConfig)
     profiling: ProfilingConfig = field(default_factory=ProfilingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    ray: RayConfig = field(default_factory=RayConfig)
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'PipelineConfig':
@@ -148,7 +163,12 @@ class PipelineConfig:
         """Load configuration from dictionary."""
         # Extract each section, providing empty dict as default
         model_config = ModelConfig(**config_dict.get('model', {}))
-        runtime_config = RuntimeConfig(**config_dict.get('runtime', {}))
+
+        # Extract runtime config with nested queue_names
+        runtime_dict = config_dict.get('runtime', {})
+        queue_names_dict = runtime_dict.pop('queue_names', {})
+        queue_names_config = QueueNamesConfig(**queue_names_dict)
+        runtime_config = RuntimeConfig(**runtime_dict, queue_names=queue_names_config)
 
         # Extract data config, filtering out deprecated fields
         data_dict = config_dict.get('data', {})
@@ -165,6 +185,7 @@ class PipelineConfig:
         system_config = SystemConfig(**config_dict.get('system', {}))
         profiling_config = ProfilingConfig(**config_dict.get('profiling', {}))
         output_config = OutputConfig(**config_dict.get('output', {}))
+        ray_config = RayConfig(**config_dict.get('ray', {}))
 
         return cls(
             model=model_config,
@@ -174,7 +195,8 @@ class PipelineConfig:
             precision=precision_config,
             system=system_config,
             profiling=profiling_config,
-            output=output_config
+            output=output_config,
+            ray=ray_config
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -197,6 +219,10 @@ class PipelineConfig:
                 'memory_sync_interval': self.runtime.memory_sync_interval,
                 'queue_num_shards': self.runtime.queue_num_shards,
                 'queue_maxsize_per_shard': self.runtime.queue_maxsize_per_shard,
+                'queue_names': {
+                    'input_queue': self.runtime.queue_names.input_queue,
+                    'output_queue': self.runtime.queue_names.output_queue
+                },
                 'max_empty_polls': self.runtime.max_empty_polls,
                 'poll_timeout': self.runtime.poll_timeout
             },
@@ -233,6 +259,9 @@ class PipelineConfig:
                 'output_dir': self.output.output_dir,
                 'verbose': self.output.verbose,
                 'quiet': self.output.quiet
+            },
+            'ray': {
+                'namespace': self.ray.namespace
             }
         }
 

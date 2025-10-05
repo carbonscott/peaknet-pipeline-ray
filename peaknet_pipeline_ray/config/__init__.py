@@ -3,11 +3,13 @@
 from .schemas import (
     ModelConfig,
     RuntimeConfig,
+    QueueNamesConfig,
     DataConfig,
     DataSourceConfig,
     SystemConfig,
     ProfilingConfig,
     OutputConfig,
+    RayConfig,
     PipelineConfig
 )
 from .data_structures import PipelineInput, PipelineOutput
@@ -15,11 +17,13 @@ from .data_structures import PipelineInput, PipelineOutput
 __all__ = [
     'ModelConfig',
     'RuntimeConfig',
+    'QueueNamesConfig',
     'DataConfig',
     'DataSourceConfig',
     'SystemConfig',
     'ProfilingConfig',
     'OutputConfig',
+    'RayConfig',
     'PipelineConfig',
     'PipelineInput',
     'PipelineOutput'

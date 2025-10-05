@@ -492,9 +492,13 @@ class PeakNetPipeline:
 
         max_actors = self.config.runtime.max_actors
 
+        # Check if the current Python process has connected to Ray
+        # NOTE: This checks if THIS process called ray.init(), NOT whether a Ray cluster is running.
+        # If you manually started a cluster with `ray start --head`, this will still be False
+        # until we call ray.init() below, which will connect to your existing cluster.
         if not ray.is_initialized():
             try:
-                ray.init()
+                ray.init(namespace=self.config.ray.namespace)
                 cluster_resources = ray.cluster_resources()
                 gpu_count = int(cluster_resources.get('GPU', 0))
 
@@ -1038,15 +1042,15 @@ class PeakNetPipeline:
         maxsize_per_shard = runtime.queue_maxsize_per_shard
 
         q1_manager = ShardedQueueManager(
-            "streaming_input_queue", 
-            num_shards=num_shards, 
+            runtime.queue_names.input_queue,
+            num_shards=num_shards,
             maxsize_per_shard=maxsize_per_shard
         )
 
         q2_manager = None
         if enable_output_queue:
             q2_manager = ShardedQueueManager(
-                "streaming_output_queue",
+                runtime.queue_names.output_queue,
                 num_shards=num_shards,
                 maxsize_per_shard=maxsize_per_shard
             )
