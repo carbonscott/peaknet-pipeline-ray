@@ -1,4 +1,4 @@
-/sdf/data/lcls/ds/prj/prjcwang31/results/proj-stream-to-ml## Data processing pipeline
+## Data processing pipeline
 
 As shown in the JPG illustration (`externals/PeakNet-Pipeline-Scratchpad.jpg`),
 the entire pipeline consists of 5 stages:
