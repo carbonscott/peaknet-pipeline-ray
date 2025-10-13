@@ -347,7 +347,9 @@ def main(argv: Optional[list] = None) -> int:
 
         # Create and run streaming pipeline
         pipeline = PeakNetPipeline(config)
-        results = pipeline.run_streaming_pipeline()
+        results = pipeline.run_streaming_pipeline(
+            enable_output_queue=config.runtime.enable_output_queue
+        )
 
         # Return appropriate exit code
         return 0 if results.success else 1

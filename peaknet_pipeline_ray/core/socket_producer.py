@@ -43,6 +43,15 @@ class RawSocketData:
     producer_id: int
     batch_id: str
 
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        """Return metadata dict for Q2 output queue compatibility."""
+        return {
+            'timestamp': self.timestamp,
+            'producer_id': self.producer_id,
+            'batch_id': self.batch_id
+        }
+
 
 @dataclass
 class ParsedSocketData:
@@ -58,6 +67,15 @@ class ParsedSocketData:
     def __len__(self):
         """Return number of tensors."""
         return len(self.tensor_refs)
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        """Return metadata dict for Q2 output queue compatibility."""
+        return {
+            'timestamp': self.timestamp,
+            'producer_id': self.producer_id,
+            'batch_id': self.batch_id
+        }
 
 
 @dataclass

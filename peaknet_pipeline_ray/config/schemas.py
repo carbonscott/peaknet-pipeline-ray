@@ -38,6 +38,7 @@ class RuntimeConfig:
     queue_num_shards: int = 4  # Number of queue shards for parallel access
     queue_maxsize_per_shard: int = 100  # Maximum items per shard (total capacity = shards * maxsize)
     queue_names: QueueNamesConfig = field(default_factory=QueueNamesConfig)  # Queue naming configuration
+    enable_output_queue: bool = False  # Enable Q2 output queue for downstream processing
     # Coordination timing configuration
     max_empty_polls: int = 20  # Check coordinator after N consecutive empty polls
     poll_timeout: float = 0.01  # Timeout for queue polling in seconds
@@ -223,6 +224,7 @@ class PipelineConfig:
                     'input_queue': self.runtime.queue_names.input_queue,
                     'output_queue': self.runtime.queue_names.output_queue
                 },
+                'enable_output_queue': self.runtime.enable_output_queue,
                 'max_empty_polls': self.runtime.max_empty_polls,
                 'poll_timeout': self.runtime.poll_timeout
             },
