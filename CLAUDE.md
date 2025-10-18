@@ -33,6 +33,7 @@ only components within the process `Q1->P->Q2`.
 export TEST_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/proj-stream-to-ml"
 export STREAMER_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/software/lclstreamer"
 export PIPELINE_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-pipeline-ray"
+export CXI_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/cxi-pipeline-ray"
 ```
 
 ### Pipeline Stage Progress
@@ -83,8 +84,16 @@ export PIPELINE_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-
 
 #### **Q2 to W**
 
-- The data writer does NOT exist yet.
-- **Not a priority** right now.
+- An example but dummy data writer exist in `$TEST_DIR/q2_file_writer.py`
+- Current **priority** should be developing a working q2 file writer eventually
+  will be able to output CXI files, which can processed by downstream programs.
+- One **big** decision to make is to try to put the model segmentation maps to
+  peak position process on CPU without using the cupy routine in
+  `peaknet-pipeline` mentioned later.
+- We made some progress in developing a new library/package for this process,
+  it's called `cxi-pipeline-ray`, and more details are described below in the
+  "Past works" section.
+- The version that is under development now is in `$CXI_DEV_DIR`.
 
 ### Past works
 
@@ -103,6 +112,32 @@ export PIPELINE_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-
 - **lclstream**
   - Path: `/sdf/data/lcls/ds/prj/prjcwang31/results/software/lclstreamer`
   - A library to function as the data producer in R stage.
+- **`crystfel_stream_parser`**
+  - Path: `/sdf/home/c/cwang31/codes/crystfel_stream_parser/`
+  - A library about parsing a "stream" file - not cuda stream or lclstreamer,
+    but crystfel stream - a file used by a crystallography software CRYSTFEL.
+- **peaknet-pipeline**
+  - Path: `/sdf/home/c/cwang31/codes/peaknet-pipeline/`
+  - A library that I used to run the peakent pipeline.  With the new
+    pipeline codes, there's really no reason to keep using this one.  I included
+    it here mainly because its `cxi_consumer.py` and how it is used can be value
+    for the current priority mentioned earlier.  Its pipeline code doesn't have
+    double buffering, but how it processes logits from the peaknet model is
+    worth checking out - basically `logits.softmax(dim=1).argmax(dim=1, keepdim=True)`.
+  - More details about going from segmentation map to peak coordinates are
+    described in `KNOWLEDGE-FIND-PEAKPOS.md`.
+- **cxi-pipeline-ray**
+  - Path: `/sdf/data/lcls/ds/prj/prjcwang31/results/codes/cxi-pipeline-ray`
+  - This library is still **under development**.  We are trying to use this
+    library to accomplish the process of taking data from the outupt queue (Q2)
+    and perform post-process and save final results on disk in the form of CXI
+    files.  The library should already have a pipelining design in it (yes,
+    another pipelining, but for the **Q2 to W** process).
+  - Some design documents in the directory `$PIPELINE_DEV_DIR`
+    - `PLAN-Q2-CXI-WRITER-v2.md`
+    - `PLAN-Q2-CXI-WRITER-ARCH.md`
+    - `PLAN-Q2-CXI-WRITER.md` (least important for now, may have some deprecated
+      design choices)
 
 ### Where to develop the package
 
