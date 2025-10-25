@@ -34,6 +34,8 @@ export TEST_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/proj-stream-to-ml"
 export STREAMER_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/software/lclstreamer"
 export PIPELINE_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/peaknet-pipeline-ray"
 export CXI_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/cxi-pipeline-ray"
+export OLD_CXI_DEV_DIR="/sdf/home/c/cwang31/codes/peaknet-pipeline/"
+export CHEETAH_CRYSTFEL_DIR="/sdf/home/c/cwang31/codes/crystfel_stream_parser"
 ```
 
 ### Pipeline Stage Progress
@@ -117,7 +119,7 @@ export CXI_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/cxi-pipeline-
   - A library about parsing a "stream" file - not cuda stream or lclstreamer,
     but crystfel stream - a file used by a crystallography software CRYSTFEL.
 - **peaknet-pipeline**
-  - Path: `/sdf/home/c/cwang31/codes/peaknet-pipeline/`
+  - Path: `/sdf/home/c/cwang31/codes/peaknet-pipeline/` or `$OLD_CXI_DEV_DIR`
   - A library that I used to run the peakent pipeline.  With the new
     pipeline codes, there's really no reason to keep using this one.  I included
     it here mainly because its `cxi_consumer.py` and how it is used can be value
@@ -125,7 +127,7 @@ export CXI_DEV_DIR="/sdf/data/lcls/ds/prj/prjcwang31/results/codes/cxi-pipeline-
     double buffering, but how it processes logits from the peaknet model is
     worth checking out - basically `logits.softmax(dim=1).argmax(dim=1, keepdim=True)`.
   - More details about going from segmentation map to peak coordinates are
-    described in `KNOWLEDGE-FIND-PEAKPOS.md`.
+    described in `KNOWLEDGE-FIND-PEAKPOS.md` and `REPO-WALKTHROUGH.md`.
 - **cxi-pipeline-ray**
   - Path: `/sdf/data/lcls/ds/prj/prjcwang31/results/codes/cxi-pipeline-ray`
   - This library is still **under development**.  We are trying to use this
