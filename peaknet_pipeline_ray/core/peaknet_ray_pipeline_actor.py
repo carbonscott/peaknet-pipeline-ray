@@ -432,11 +432,24 @@ class PeakNetPipelineActorBase:
                     # Swap buffers but DO NOT sync - this is key to maintaining overlap
                     self.pipeline.swap()
 
+                # Initialize metadata variables (will be populated based on data source)
+                preprocessing_metadata = None
+                original_image_ref = None
+
                 # Extract data from different sources
                 if hasattr(batch_data, 'tensor_refs'):
                     # Producer-side parsing (parse_location="producer")
                     # ParsedSocketData - tensors already parsed, dereference ObjectRefs
                     cpu_tensors = ray.get(batch_data.tensor_refs)
+
+                    # NEW: Extract preprocessing metadata for Q2→W reconstruction
+                    preprocessing_metadata = getattr(batch_data, 'preprocessing_metadata', None)
+
+                    # NEW: Store preprocessed detector image for CXI writer
+                    # Reconstruct batch from individual tensor_refs
+                    import numpy as np
+                    batch_array = np.stack([t.numpy() for t in cpu_tensors])
+                    original_image_ref = ray.put(batch_array)
                 elif hasattr(batch_data, 'raw_bytes_ref'):
                     # Consumer-side parsing (parse_location="consumer")
                     # RawSocketData - parse during GPU overlap (Q1→P stage)
@@ -481,7 +494,9 @@ class PeakNetPipelineActorBase:
                         output_batch = PipelineOutput.from_input_and_predictions(
                             pipeline_input=last_output_data['input'],
                             predictions=output_tensor,
-                            start_time=last_output_data['start_time']
+                            start_time=last_output_data['start_time'],
+                            original_image_ref=last_output_data.get('original_image_ref'),  # NEW
+                            preprocessing_metadata=last_output_data.get('preprocessing_metadata')  # NEW
                         )
                         q2_manager.put(output_batch)
 
@@ -489,7 +504,9 @@ class PeakNetPipelineActorBase:
                 last_output_data = {
                     'input': batch_data if hasattr(batch_data, 'metadata') else None,
                     'batch_size': actual_batch_size,
-                    'start_time': time.time()
+                    'start_time': time.time(),
+                    'original_image_ref': original_image_ref,  # NEW
+                    'preprocessing_metadata': preprocessing_metadata  # NEW
                 }
 
                 processed_count += 1
@@ -523,7 +540,9 @@ class PeakNetPipelineActorBase:
                         final_output = PipelineOutput.from_input_and_predictions(
                             pipeline_input=last_output_data['input'],
                             predictions=current_buffer_output,
-                            start_time=last_output_data['start_time']
+                            start_time=last_output_data['start_time'],
+                            original_image_ref=last_output_data.get('original_image_ref'),  # NEW
+                            preprocessing_metadata=last_output_data.get('preprocessing_metadata')  # NEW
                         )
                         q2_manager.put(final_output)
 

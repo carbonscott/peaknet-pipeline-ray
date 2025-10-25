@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 from pynng import Pull0
 
-from ..config.schemas import DataSourceConfig
+from ..config.schemas import DataSourceConfig, PreprocessingMetadata
 from ..utils.queue import ShardedQueueManager
 
 logging.basicConfig(level=logging.INFO)
@@ -64,6 +64,12 @@ class ParsedSocketData:
     producer_id: int
     batch_id: str
 
+    # NEW: Physics metadata from socket (per-event data)
+    physics_metadata: Optional[Dict[str, Any]] = None  # e.g., {'timestamp': array(8,), 'photon_wavelength': array(8,)}
+
+    # NEW: Preprocessing metadata for Q2→W detector image reconstruction
+    preprocessing_metadata: Optional[PreprocessingMetadata] = None
+
     def __len__(self):
         """Return number of tensors."""
         return len(self.tensor_refs)
@@ -71,11 +77,15 @@ class ParsedSocketData:
     @property
     def metadata(self) -> Dict[str, Any]:
         """Return metadata dict for Q2 output queue compatibility."""
-        return {
+        metadata = {
             'timestamp': self.timestamp,
             'producer_id': self.producer_id,
             'batch_id': self.batch_id
         }
+        # Add physics metadata if available
+        if self.physics_metadata:
+            metadata.update(self.physics_metadata)
+        return metadata
 
 
 @dataclass
@@ -196,6 +206,10 @@ class SocketProducer:
         import torch
 
         try:
+            # Initialize metadata variables (will be populated based on format)
+            physics_metadata = {}
+            preprocessing_metadata = None
+
             if self.serialization_format == "numpy":
                 # Fast NumPy .npz parsing (3-7x faster than HDF5)
                 arrays = np.load(BytesIO(raw_bytes))
@@ -207,6 +221,27 @@ class SocketProducer:
                     raise ValueError(f"Detector data key '{detector_data_key}' not found in .npz. Available keys: {arrays.files}")
 
                 detector_data = arrays[detector_data_key]
+
+                # NEW: Extract physics metadata (timestamp, photon_wavelength)
+                physics_metadata = {}
+                for key in ['timestamp', 'photon_wavelength']:
+                    field_key = self.fields.get(key, key)
+                    if field_key in arrays.files:
+                        physics_metadata[key] = arrays[field_key]
+
+                # NEW: Extract original shape metadata for detector image reconstruction
+                preprocessing_metadata = None
+                original_shape_key = self.fields.get("detector_data_original_shape", "detector_data_original_shape")
+                if original_shape_key in arrays.files:
+                    original_shape_array = arrays[original_shape_key]  # [B, C, H_orig, W_orig]
+                    original_shape = tuple(original_shape_array)
+                    preprocessed_shape = detector_data.shape  # (B*C, 1, H, W)
+
+                    preprocessing_metadata = PreprocessingMetadata(
+                        original_shape=original_shape,
+                        preprocessed_shape=preprocessed_shape
+                    )
+
                 arrays.close()
 
             elif self.serialization_format == "hdf5":
@@ -271,7 +306,9 @@ class SocketProducer:
                 tensor_refs=tensor_refs,
                 timestamp=time.time(),
                 producer_id=self.producer_id,
-                batch_id=batch_id
+                batch_id=batch_id,
+                physics_metadata=physics_metadata if physics_metadata else None,  # NEW
+                preprocessing_metadata=preprocessing_metadata  # NEW
             )
 
         except Exception as e:

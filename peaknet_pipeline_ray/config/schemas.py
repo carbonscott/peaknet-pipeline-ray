@@ -7,6 +7,22 @@ from pathlib import Path
 
 
 @dataclass
+class PreprocessingMetadata:
+    """Metadata for detector image reconstruction in Q2→W stage.
+
+    Stores full 4D shapes to enable:
+    1. Reshape: (B*C, 1, H, W) → (B, C, H, W)
+    2. Unpad: (B, C, H, W) → (B, C, H_orig, W_orig)
+
+    Example:
+        original_shape = (8, 16, 352, 384)      # B=8 batches, C=16 panels, original size 352x384
+        preprocessed_shape = (128, 1, 512, 512)  # B*C=128, merged to 1 channel, padded to 512x512
+    """
+    original_shape: Tuple[int, int, int, int]      # (B, C, H_orig, W_orig)
+    preprocessed_shape: Tuple[int, int, int, int]  # (B*C, 1, H, W)
+
+
+@dataclass
 class ModelConfig:
     """Configuration for PeakNet model."""
     yaml_path: Optional[str] = None
@@ -81,6 +97,7 @@ class DataSourceConfig:
         "detector_data": "data",
         "timestamp": "timestamp",
         "photon_wavelength": "wavelength",
+        "detector_data_original_shape": "detector_data_original_shape",  # NEW: For cheetah/crystfel integration
         "random": "random"
     })
 
