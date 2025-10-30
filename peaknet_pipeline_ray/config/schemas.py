@@ -48,6 +48,8 @@ class RuntimeConfig:
     num_producers: int = 4
     batches_per_producer: int = 5
     inter_batch_delay: float = 0.1
+    # Pipeline concurrency configuration
+    pipeline_concurrency: int = 2  # Number of in-flight batches (2=double, 3=triple, 4+=quad+ buffering)
     # Memory management configuration
     memory_sync_interval: int = 0  # Sync every N batches for memory management (0=disable)
     # Queue configuration

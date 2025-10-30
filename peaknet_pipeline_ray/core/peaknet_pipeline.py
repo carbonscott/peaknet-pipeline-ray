@@ -188,15 +188,20 @@ def create_peaknet_model(peaknet_config, weights_path, gpu_id, compile_mode=None
         return None, None, None
 
 
-class DoubleBufferedPipeline:
+class NWayBufferedPipeline:
     """
-    Generic double buffered pipeline for H2D -> Model Compute -> D2H.
+    Generic N-way buffered pipeline for H2D -> Model Compute -> D2H.
+
+    Supports configurable concurrency (N-way buffering) to hide CPU packaging latency
+    and improve GPU utilization. With N=2 (default), behaves as double buffering.
+    With N=3 (recommended), achieves near 100% GPU utilization by allowing D2H sync
+    to complete instantly and CPU packaging to overlap with GPU compute.
 
     Provides a clean API with process_batch() method that handles the full pipeline.
     Internal methods are private to encourage proper encapsulation.
     """
 
-    def __init__(self, model, batch_size, input_shape, output_shape, gpu_id, pin_memory=True, autocast_context=None):
+    def __init__(self, model, batch_size, input_shape, output_shape, gpu_id, pin_memory=True, autocast_context=None, num_buffers=2):
         self.model = model
         self.batch_size = batch_size
         self.input_shape = input_shape
@@ -204,7 +209,7 @@ class DoubleBufferedPipeline:
         self.gpu_id = gpu_id
         self.pin_memory = pin_memory
         self.autocast_context = autocast_context
-
+        self.num_buffers = num_buffers
 
         # Check if model is None (no-op mode)
         self.is_noop = (self.model is None)
@@ -215,70 +220,77 @@ class DoubleBufferedPipeline:
         self.d2h_stream = torch.cuda.Stream(device=gpu_id)
 
         # CUDA events for fine-grained synchronization between all pipeline stages
-        self.h2d_done_event = {
-            'A': torch.cuda.Event(enable_timing=False),
-            'B': torch.cuda.Event(enable_timing=False)
-        }
-        self.compute_done_event = {
-            'A': torch.cuda.Event(enable_timing=False),
-            'B': torch.cuda.Event(enable_timing=False)
-        }
-        self.d2h_done_event = {
-            'A': torch.cuda.Event(enable_timing=False),
-            'B': torch.cuda.Event(enable_timing=False)
-        }
+        # Create N sets of events (one per buffer)
+        self.h2d_done_event = [torch.cuda.Event(enable_timing=False) for _ in range(num_buffers)]
+        self.compute_done_event = [torch.cuda.Event(enable_timing=False) for _ in range(num_buffers)]
+        self.d2h_done_event = [torch.cuda.Event(enable_timing=False) for _ in range(num_buffers)]
+
         # Prime all events so wait_event() never deadlocks on first use
         for events in [self.h2d_done_event, self.compute_done_event, self.d2h_done_event]:
-            for ev in events.values():
+            for ev in events:
                 ev.record()  # Record on default stream makes them signaled immediately
 
-        # GPU input buffers (use input_shape)
-        self.gpu_input_buffers = {
-            'A': torch.zeros(batch_size, *input_shape, device=f'cuda:{gpu_id}'),
-            'B': torch.zeros(batch_size, *input_shape, device=f'cuda:{gpu_id}')
-        }
+        # GPU input buffers (use input_shape) - create N buffer sets
+        self.gpu_input_buffers = [
+            torch.zeros(batch_size, *input_shape, device=f'cuda:{gpu_id}')
+            for _ in range(num_buffers)
+        ]
 
-        # GPU output buffers (use output_shape)
-        self.gpu_output_buffers = {
-            'A': torch.zeros(batch_size, *output_shape, device=f'cuda:{gpu_id}'),
-            'B': torch.zeros(batch_size, *output_shape, device=f'cuda:{gpu_id}')
-        }
+        # GPU output buffers (use output_shape) - create N buffer sets
+        self.gpu_output_buffers = [
+            torch.zeros(batch_size, *output_shape, device=f'cuda:{gpu_id}')
+            for _ in range(num_buffers)
+        ]
 
-        # CPU output buffers (use output_shape)
-        self.cpu_output_buffers = {
-            'A': torch.empty((batch_size, *output_shape), pin_memory=pin_memory),
-            'B': torch.empty((batch_size, *output_shape), pin_memory=pin_memory)
-        }
+        # CPU output buffers (use output_shape) - create N buffer sets
+        self.cpu_output_buffers = [
+            torch.empty((batch_size, *output_shape), pin_memory=pin_memory)
+            for _ in range(num_buffers)
+        ]
 
         # DEVICE VALIDATION: Verify all GPU buffers are on correct device
-        print(f"[DEBUG] Pipeline buffer validation:")
-        for key in ['A', 'B']:
-            input_device = self.gpu_input_buffers[key].device
-            output_device = self.gpu_output_buffers[key].device
-            print(f"[DEBUG]   Buffer {key}: input {input_device}, output {output_device}")
-            assert input_device == torch.device(f'cuda:{gpu_id}'), f"Input buffer {key} on wrong device: {input_device}"
-            assert output_device == torch.device(f'cuda:{gpu_id}'), f"Output buffer {key} on wrong device: {output_device}"
-        print(f"✓ All pipeline buffers verified on GPU {gpu_id}")
+        print(f"[DEBUG] Pipeline buffer validation (N={num_buffers}):")
+        for idx in range(num_buffers):
+            input_device = self.gpu_input_buffers[idx].device
+            output_device = self.gpu_output_buffers[idx].device
+            print(f"[DEBUG]   Buffer {idx}: input {input_device}, output {output_device}")
+            assert input_device == torch.device(f'cuda:{gpu_id}'), f"Input buffer {idx} on wrong device: {input_device}"
+            assert output_device == torch.device(f'cuda:{gpu_id}'), f"Output buffer {idx} on wrong device: {output_device}"
+        print(f"✓ All {num_buffers} pipeline buffer sets verified on GPU {gpu_id}")
 
         # Log buffer memory usage
         if torch.cuda.is_available():
-            input_mem = self.gpu_input_buffers['A'].numel() * self.gpu_input_buffers['A'].element_size() * 2 / (1024**3)
-            output_mem = self.gpu_output_buffers['A'].numel() * self.gpu_output_buffers['A'].element_size() * 2 / (1024**3)
-            total_buffer_mem = input_mem + output_mem
-            print(f"[DEBUG] Pipeline buffer memory: {total_buffer_mem:.3f} GB ({input_mem:.3f} GB input + {output_mem:.3f} GB output)")
+            input_mem_per_buffer = self.gpu_input_buffers[0].numel() * self.gpu_input_buffers[0].element_size() / (1024**3)
+            output_mem_per_buffer = self.gpu_output_buffers[0].numel() * self.gpu_output_buffers[0].element_size() / (1024**3)
+            input_mem_total = input_mem_per_buffer * num_buffers
+            output_mem_total = output_mem_per_buffer * num_buffers
+            total_buffer_mem = input_mem_total + output_mem_total
+            print(f"[DEBUG] Pipeline buffer memory: {total_buffer_mem:.3f} GB ({input_mem_total:.3f} GB input + {output_mem_total:.3f} GB output)")
+            print(f"[DEBUG]   Per buffer set: {(input_mem_per_buffer + output_mem_per_buffer):.3f} GB")
 
-        # Pipeline state
-        self.current = 'A'
+        # Pipeline state - current buffer index
+        self.current_idx = 0
 
     def swap(self):
-        """Swap current buffer"""
-        self.current = 'B' if self.current == 'A' else 'A'
+        """Advance to next buffer (circular rotation)"""
+        self.current_idx = (self.current_idx + 1) % self.num_buffers
+
+    @property
+    def current(self):
+        """
+        Return current buffer index (for backward compatibility).
+
+        Previously this was 'A' or 'B' string, now it's an integer 0, 1, 2, ...
+        This property allows existing code to access pipeline.current without breaking.
+        """
+        return self.current_idx
 
     def _h2d_transfer(self, cpu_batch, batch_idx, current_batch_size, nvtx_prefix):
         """Perform H2D transfer with fine-grained event-based synchronization"""
-        gpu_buffer = self.gpu_input_buffers[self.current]
-        d2h_event = self.d2h_done_event[self.current]
-        h2d_event = self.h2d_done_event[self.current]
+        curr_idx = self.current_idx
+        gpu_buffer = self.gpu_input_buffers[curr_idx]
+        d2h_event = self.d2h_done_event[curr_idx]
+        h2d_event = self.h2d_done_event[curr_idx]
 
         with torch.cuda.stream(self.h2d_stream):
             with nvtx.range(f"{nvtx_prefix}_h2d_batch_{batch_idx}"):
@@ -298,10 +310,11 @@ class DoubleBufferedPipeline:
 
     def _compute_workload(self, batch_idx, current_batch_size, nvtx_prefix):
         """Perform compute workload: generic model inference or no-op"""
-        gpu_input_buffer = self.gpu_input_buffers[self.current]
-        gpu_output_buffer = self.gpu_output_buffers[self.current]
-        h2d_event = self.h2d_done_event[self.current]
-        compute_event = self.compute_done_event[self.current]
+        curr_idx = self.current_idx
+        gpu_input_buffer = self.gpu_input_buffers[curr_idx]
+        gpu_output_buffer = self.gpu_output_buffers[curr_idx]
+        h2d_event = self.h2d_done_event[curr_idx]
+        compute_event = self.compute_done_event[curr_idx]
 
         with torch.cuda.stream(self.compute_stream):
             with nvtx.range(f"{nvtx_prefix}_compute_batch_{batch_idx}"):
@@ -370,10 +383,11 @@ class DoubleBufferedPipeline:
 
     def _d2h_transfer(self, batch_idx, current_batch_size, nvtx_prefix):
         """Perform D2H transfer from current buffer (only valid slice)"""
-        gpu_output_buffer = self.gpu_output_buffers[self.current]
-        cpu_buffer = self.cpu_output_buffers[self.current]
-        compute_event = self.compute_done_event[self.current]
-        d2h_event = self.d2h_done_event[self.current]
+        curr_idx = self.current_idx
+        gpu_output_buffer = self.gpu_output_buffers[curr_idx]
+        cpu_buffer = self.cpu_output_buffers[curr_idx]
+        compute_event = self.compute_done_event[curr_idx]
+        d2h_event = self.d2h_done_event[curr_idx]
 
         with torch.cuda.stream(self.d2h_stream):
             with nvtx.range(f"{nvtx_prefix}_d2h_batch_{batch_idx}"):
@@ -502,14 +516,15 @@ def run_pipeline_test(
     else:
         print(f"PeakNet mode: input_shape={input_shape}, output_shape={output_shape}")
 
-    # Create generic pipeline
-    pipeline = DoubleBufferedPipeline(
+    # Create generic pipeline (default num_buffers=2 for backward compatibility)
+    pipeline = NWayBufferedPipeline(
         model=peaknet_model,
         batch_size=batch_size,
         input_shape=input_shape,
         output_shape=output_shape,
         gpu_id=gpu_id,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
+        num_buffers=2  # Default to double buffering
     )
 
     # Warmup phase (only when using torch.compile)

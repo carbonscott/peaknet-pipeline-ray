@@ -576,6 +576,7 @@ class PeakNetPipeline:
                 # Pipeline configuration
                 input_shape=input_shape,
                 batch_size=self.config.runtime.batch_size,
+                num_buffers=self.config.runtime.pipeline_concurrency,  # N-way buffering concurrency
                 # PeakNet configuration
                 weights_path=self.config.model.weights_path,
                 peaknet_config=self.config.model.peaknet_config,
