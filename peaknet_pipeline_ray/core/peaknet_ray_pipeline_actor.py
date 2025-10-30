@@ -18,7 +18,7 @@ import psutil
 import os
 
 # Import existing pipeline components
-from .peaknet_pipeline import DoubleBufferedPipeline, create_peaknet_model, get_numa_info, get_gpu_info
+from .peaknet_pipeline import NWayBufferedPipeline, create_peaknet_model, get_numa_info, get_gpu_info
 from .peaknet_utils import create_autocast_context
 # GPU health validation now handled at system level before Ray initialization
 
@@ -28,11 +28,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 class PeakNetPipelineActorBase:
     """
-    Ray actor that wraps DoubleBufferedPipeline for distributed processing.
+    Ray actor that wraps NWayBufferedPipeline for distributed processing.
 
     Each actor maintains:
-    - A loaded PeakNet model 
-    - DoubleBufferedPipeline instance
+    - A loaded PeakNet model
+    - NWayBufferedPipeline instance with configurable concurrency
     - GPU assignment from Ray
     - Statistics tracking
     """
@@ -51,6 +51,7 @@ class PeakNetPipelineActorBase:
         precision_dtype: str = "float32",
         serialization_format: str = "numpy",
         fields: Dict[str, str] = None,
+        num_buffers: int = 2,
     ):
         """
         Initialize the pipeline actor.
@@ -68,6 +69,7 @@ class PeakNetPipelineActorBase:
             precision_dtype: Precision type for mixed precision ('float32', 'bfloat16', 'float16')
             serialization_format: Data serialization format ('numpy' or 'hdf5')
             fields: Field mapping dictionary for data extraction
+            num_buffers: Number of concurrent in-flight batches (2=double, 3=triple, 4+=quad+ buffering)
         """
         logging.info("=== Initializing PeakNetPipelineActor ===")
 
@@ -126,6 +128,10 @@ class PeakNetPipelineActorBase:
         self.deterministic = deterministic
         self.serialization_format = serialization_format
         self.fields = fields or {"detector_data": "data"}
+        self.num_buffers = num_buffers
+
+        # Circular metadata buffer to track N batches' metadata for N-way buffering
+        self.metadata_buffer = [None] * num_buffers
 
         # Get system info
         self.numa_info = get_numa_info()
@@ -170,18 +176,21 @@ class PeakNetPipelineActorBase:
         autocast_context = create_autocast_context(device_str, precision_dtype)
         logging.info(f"Created autocast context: dtype={precision_dtype}")
 
-        # Create double buffered pipeline - use the same GPU device as assigned to this actor
+        # Create N-way buffered pipeline - use the same GPU device as assigned to this actor
         pipeline_gpu_id = self.gpu_id
 
-        self.pipeline = DoubleBufferedPipeline(
+        self.pipeline = NWayBufferedPipeline(
             model=self.peaknet_model,
             batch_size=batch_size,
             input_shape=self.input_shape,
             output_shape=self.output_shape,
             gpu_id=pipeline_gpu_id,
             pin_memory=pin_memory,
-            autocast_context=autocast_context
+            autocast_context=autocast_context,
+            num_buffers=num_buffers
         )
+
+        logging.info(f"Created N-way buffered pipeline with {num_buffers} buffers (concurrency level={num_buffers})")
 
         # Initialize statistics
         self.stats = {
@@ -432,11 +441,24 @@ class PeakNetPipelineActorBase:
                     # Swap buffers but DO NOT sync - this is key to maintaining overlap
                     self.pipeline.swap()
 
+                # Initialize metadata variables (will be populated based on data source)
+                preprocessing_metadata = None
+                original_image_ref = None
+
                 # Extract data from different sources
                 if hasattr(batch_data, 'tensor_refs'):
                     # Producer-side parsing (parse_location="producer")
                     # ParsedSocketData - tensors already parsed, dereference ObjectRefs
                     cpu_tensors = ray.get(batch_data.tensor_refs)
+
+                    # NEW: Extract preprocessing metadata for Q2→W reconstruction
+                    preprocessing_metadata = getattr(batch_data, 'preprocessing_metadata', None)
+
+                    # NEW: Store preprocessed detector image for CXI writer
+                    # Reconstruct batch from individual tensor_refs
+                    import numpy as np
+                    batch_array = np.stack([t.numpy() for t in cpu_tensors])
+                    original_image_ref = ray.put(batch_array)
                 elif hasattr(batch_data, 'raw_bytes_ref'):
                     # Consumer-side parsing (parse_location="consumer")
                     # RawSocketData - parse during GPU overlap (Q1→P stage)
@@ -460,6 +482,26 @@ class PeakNetPipelineActorBase:
 
                 actual_batch_size = len(cpu_tensors)
 
+                # STRICT VALIDATION: Batch size from producer MUST match configured batch_size
+                if actual_batch_size != self.batch_size:
+                    error_msg = (
+                        f"❌ BATCH SIZE MISMATCH: Producer sent {actual_batch_size} samples, "
+                        f"but pipeline configured for batch_size={self.batch_size}\n"
+                        f"\n"
+                        f"   Producer-Consumer Contract Violation!\n"
+                        f"   The producer and consumer MUST agree on batch size.\n"
+                        f"\n"
+                        f"   Fix options:\n"
+                        f"   1. Update pipeline config: batch_size: {actual_batch_size}\n"
+                        f"   2. Update producer config: Ensure producer sends batches of {self.batch_size}\n"
+                        f"\n"
+                        f"   Location: Batch #{processed_count}, Actor {self.gpu_id}\n"
+                        f"   Expected: {self.batch_size} samples per batch\n"
+                        f"   Received: {actual_batch_size} samples per batch"
+                    )
+                    logging.error(error_msg)
+                    raise ValueError(error_msg)
+
                 # Process through pipeline - this starts async H2D/Compute/D2H
                 with nvtx.range(f"stream_process_batch_{processed_count}"):
                     self.pipeline.process_batch(
@@ -469,28 +511,50 @@ class PeakNetPipelineActorBase:
                         nvtx_prefix=f"stream_actor_{self.gpu_id}"
                     )
 
-                # Push previous results to output queue if available and queue provided
-                if q2_manager is not None and last_output_data is not None:
-                    # Get results from the buffer that just finished (previous iteration)
-                    prev_buffer = 'B' if self.pipeline.current == 'A' else 'A'
-                    output_tensor = self.pipeline.cpu_output_buffers[prev_buffer][:last_output_data['batch_size']].clone()
-
-                    # Create output using same metadata as input
-                    if hasattr(last_output_data['input'], 'metadata'):
-                        from ..config.data_structures import PipelineOutput
-                        output_batch = PipelineOutput.from_input_and_predictions(
-                            pipeline_input=last_output_data['input'],
-                            predictions=output_tensor,
-                            start_time=last_output_data['start_time']
-                        )
-                        q2_manager.put(output_batch)
-
-                # Store current batch info for next iteration's output
-                last_output_data = {
+                # Store current batch metadata in circular buffer BEFORE handling output
+                # (will be retrieved (N-1) iterations later)
+                metadata_idx = processed_count % self.num_buffers
+                self.metadata_buffer[metadata_idx] = {
                     'input': batch_data if hasattr(batch_data, 'metadata') else None,
                     'batch_size': actual_batch_size,
-                    'start_time': time.time()
+                    'start_time': time.time(),
+                    'original_image_ref': original_image_ref,
+                    'preprocessing_metadata': preprocessing_metadata
                 }
+
+                # Handle output from (N-1) iterations ago
+                # Only start after pipeline has filled (processed >= N-1 batches)
+                if processed_count >= self.num_buffers - 1 and q2_manager is not None:
+                    # Calculate which buffer to read from (N-1 iterations old)
+                    output_idx = (self.pipeline.current_idx - (self.num_buffers - 1)) % self.num_buffers
+
+                    # Retrieve metadata for the batch we're outputting
+                    output_metadata_idx = (processed_count - (self.num_buffers - 1)) % self.num_buffers
+                    output_data = self.metadata_buffer[output_metadata_idx]
+
+                    # CRITICAL: Synchronize on D2H event for this specific buffer
+                    # With N>=3, this completes instantly (D2H finished long ago)
+                    with nvtx.range(f"sync_d2h_buffer_{output_idx}"):
+                        self.pipeline.d2h_done_event[output_idx].synchronize()
+
+                    # Now safe to read output buffer (D2H complete)
+                    with nvtx.range(f"clone_buffer_{output_idx}"):
+                        output_tensor = self.pipeline.cpu_output_buffers[output_idx][:output_data['batch_size']].clone()
+
+                    # Package and send to Q2 (CPU-bound work, overlaps with GPU work on current buffer)
+                    with nvtx.range(f"package_output_{output_idx}"):
+                        if output_data['input'] is not None and hasattr(output_data['input'], 'metadata'):
+                            from ..config.data_structures import PipelineOutput
+                            output_batch = PipelineOutput.from_input_and_predictions(
+                                pipeline_input=output_data['input'],
+                                predictions=output_tensor,
+                                start_time=output_data['start_time'],
+                                original_image_ref=output_data.get('original_image_ref'),
+                                preprocessing_metadata=output_data.get('preprocessing_metadata')
+                            )
+                            q2_manager.put(output_batch)
+
+                    logging.debug(f"Actor {self.gpu_id}: Delivered output from buffer {output_idx} (batch {processed_count - (self.num_buffers - 1)}) to Q2")
 
                 processed_count += 1
 
@@ -515,17 +579,42 @@ class PeakNetPipelineActorBase:
                 with nvtx.range("final_streaming_sync"):
                     self.pipeline.wait_for_completion()
 
-                # Handle final output batch if needed
-                if q2_manager is not None and last_output_data is not None:
-                    current_buffer_output = self.pipeline.cpu_output_buffers[self.pipeline.current][:last_output_data['batch_size']].clone()
-                    if hasattr(last_output_data['input'], 'metadata'):
-                        from ..config.data_structures import PipelineOutput
-                        final_output = PipelineOutput.from_input_and_predictions(
-                            pipeline_input=last_output_data['input'],
-                            predictions=current_buffer_output,
-                            start_time=last_output_data['start_time']
-                        )
-                        q2_manager.put(final_output)
+                # Handle remaining (N-1) outputs still in flight
+                # These are the last (num_buffers - 1) batches that were processed but not yet output
+                if q2_manager is not None:
+                    logging.info(f"Actor {self.gpu_id}: Draining pipeline - handling final {self.num_buffers - 1} outputs")
+
+                    for i in range(1, self.num_buffers):
+                        # Calculate which batch we're outputting
+                        remaining_batch_idx = processed_count - (self.num_buffers - 1) + i
+
+                        # Check if this batch exists (might have fewer than N batches processed)
+                        if remaining_batch_idx >= 0 and remaining_batch_idx < processed_count:
+                            # Calculate buffer index for this remaining output
+                            output_idx = (self.pipeline.current_idx - (self.num_buffers - 1 - i)) % self.num_buffers
+                            metadata_idx = remaining_batch_idx % self.num_buffers
+                            output_data = self.metadata_buffer[metadata_idx]
+
+                            if output_data is not None:
+                                # Sync and handle output
+                                with nvtx.range(f"final_sync_buffer_{output_idx}"):
+                                    self.pipeline.d2h_done_event[output_idx].synchronize()
+
+                                with nvtx.range(f"final_clone_buffer_{output_idx}"):
+                                    output_tensor = self.pipeline.cpu_output_buffers[output_idx][:output_data['batch_size']].clone()
+
+                                with nvtx.range(f"final_package_output_{output_idx}"):
+                                    if output_data['input'] is not None and hasattr(output_data['input'], 'metadata'):
+                                        from ..config.data_structures import PipelineOutput
+                                        final_output = PipelineOutput.from_input_and_predictions(
+                                            pipeline_input=output_data['input'],
+                                            predictions=output_tensor,
+                                            start_time=output_data['start_time'],
+                                            original_image_ref=output_data.get('original_image_ref'),
+                                            preprocessing_metadata=output_data.get('preprocessing_metadata')
+                                        )
+                                        q2_manager.put(final_output)
+                                        logging.debug(f"Actor {self.gpu_id}: Delivered final output from buffer {output_idx} (batch {remaining_batch_idx}) to Q2")
 
             # Register with coordinator that this actor is done
             if coordinator is not None:
