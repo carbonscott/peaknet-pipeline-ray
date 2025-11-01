@@ -243,38 +243,8 @@ class SocketProducer:
                     )
 
                 arrays.close()
-
-            elif self.serialization_format == "hdf5":
-                # Legacy HDF5 parsing (slower, for backward compatibility)
-                import h5py
-                import hdf5plugin
-
-                with h5py.File(BytesIO(raw_bytes), 'r') as h5_file:
-                    detector_data_path = self.fields.get("detector_data", "/data/data")
-
-                    if detector_data_path in h5_file:
-                        detector_data = h5_file[detector_data_path][:]
-                    else:
-                        # Try common fallback paths
-                        possible_paths = ['/data/data', '/entry/data/detector_data', '/detector_data']
-                        detector_data = None
-                        for path in possible_paths:
-                            if path in h5_file:
-                                detector_data = h5_file[path][:]
-                                break
-
-                        # Last resort: use first available dataset
-                        if detector_data is None:
-                            for key in h5_file.keys():
-                                if hasattr(h5_file[key], 'shape'):
-                                    detector_data = h5_file[key][:]
-                                    logging.debug(f"Producer {self.producer_id}: Using fallback field '{key}' for detector data")
-                                    break
-
-                        if detector_data is None:
-                            raise ValueError(f"Detector data path '{detector_data_path}' not found in HDF5. Available paths: {list(h5_file.keys())}")
             else:
-                raise ValueError(f"Unknown serialization format: {self.serialization_format}. Must be 'numpy' or 'hdf5'")
+                raise ValueError(f"Unsupported serialization format: {self.serialization_format}. Only 'numpy' format is supported.")
 
             # Convert to numpy array if needed
             if not isinstance(detector_data, np.ndarray):
