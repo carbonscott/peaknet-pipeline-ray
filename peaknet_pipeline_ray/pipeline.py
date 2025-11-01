@@ -22,7 +22,6 @@ import ray
 from .config import PipelineConfig
 from .config.data_structures import PipelineInput, PipelineOutput
 from .core.gpu_health_validator import get_healthy_gpus_for_ray
-from .core.peaknet_ray_data_producer import RayDataProducerManager
 from .core.peaknet_ray_pipeline_actor import create_pipeline_actors
 
 
