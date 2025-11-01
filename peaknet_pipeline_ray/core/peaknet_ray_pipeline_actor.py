@@ -49,7 +49,6 @@ class PeakNetPipelineActorBase:
         deterministic: bool = False,
         gpu_id: int = None,
         precision_dtype: str = "float32",
-        serialization_format: str = "numpy",
         fields: Dict[str, str] = None,
         num_buffers: int = 2,
     ):
@@ -67,7 +66,6 @@ class PeakNetPipelineActorBase:
             deterministic: Use deterministic operations
             gpu_id: Explicit GPU ID to use (None for Ray auto-assignment)
             precision_dtype: Precision type for mixed precision ('float32', 'bfloat16', 'float16')
-            serialization_format: Data serialization format ('numpy' or 'hdf5')
             fields: Field mapping dictionary for data extraction
             num_buffers: Number of concurrent in-flight batches (2=double, 3=triple, 4+=quad+ buffering)
         """
@@ -126,7 +124,6 @@ class PeakNetPipelineActorBase:
         self.configured_warmup_iterations = warmup_iterations
         self.pin_memory = pin_memory
         self.deterministic = deterministic
-        self.serialization_format = serialization_format
         self.fields = fields or {"detector_data": "data"}
         self.num_buffers = num_buffers
 
@@ -324,8 +321,7 @@ class PeakNetPipelineActorBase:
 
                 # Extract data from different sources
                 if hasattr(batch_data, 'tensor_refs'):
-                    # Producer-side parsing (parse_location="producer")
-                    # ParsedSocketData - tensors already parsed, dereference ObjectRefs
+                    # ParsedSocketData - tensors already parsed in producer, dereference ObjectRefs
                     cpu_tensors = ray.get(batch_data.tensor_refs)
 
                     # NEW: Extract preprocessing metadata for Q2→W reconstruction

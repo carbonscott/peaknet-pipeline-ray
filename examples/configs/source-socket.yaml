@@ -38,8 +38,6 @@ data_source:
     - ["sdfada016", 12322]
   socket_timeout: 300.0
   socket_retry_attempts: 5
-  serialization_format: numpy
-  parse_location: producer
   fields:
     detector_data: "detector_data"
     timestamp: "timestamp"

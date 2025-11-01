@@ -440,7 +440,6 @@ class PeakNetPipeline:
                 # Mixed precision configuration
                 precision_dtype=self.config.precision.dtype,
                 # Data source configuration for socket mode
-                serialization_format=self.config.data_source.serialization_format,
                 fields=self.config.data_source.fields,
             )
 

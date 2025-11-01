@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
 """
-Socket Producer - Configurable Parsing for Performance Testing
+Socket Producer - NumPy Format Streaming with Producer-Side Parsing
 
-This producer supports two parsing strategies to compare throughput:
+Streams detector data from socket with immediate parsing:
+1. Receive raw bytes from socket (.npz format)
+2. Parse immediately in producer (S→Q1 stage)
+3. Push parsed tensors to queue for GPU inference
 
-Mode 1 (parse_location="consumer", default): Q1→P parsing
-1. Receive raw bytes from socket
-2. Push raw bytes directly to queue
-3. Let pipeline actors parse DURING GPU compute for perfect overlap
-
-Mode 2 (parse_location="producer"): S→Q1 parsing
-1. Receive raw bytes from socket
-2. Parse immediately in producer
-3. Push parsed tensors to queue
-
-This configurability allows A/B testing to determine optimal parsing location.
+Producer-side parsing won performance testing by overlapping parse time with network I/O.
 """
 
 import ray
@@ -36,7 +29,7 @@ logging.basicConfig(level=logging.INFO)
 class RawSocketData:
     """Lightweight wrapper for raw socket bytes with minimal metadata.
 
-    Used when parse_location="consumer" - stores raw bytes as ObjectRef.
+    Legacy: No longer used (producer-side parsing only).
     """
     raw_bytes_ref: ray.ObjectRef  # ObjectRef to raw bytes
     timestamp: float
@@ -57,7 +50,7 @@ class RawSocketData:
 class ParsedSocketData:
     """Wrapper for pre-parsed tensors with ObjectRefs to prevent GC.
 
-    Used when parse_location="producer" - stores parsed tensors as ObjectRefs.
+    Stores parsed tensors as ObjectRefs for queue-based streaming.
     """
     tensor_refs: List[ray.ObjectRef]  # List of ObjectRefs to individual tensors
     timestamp: float
@@ -132,9 +125,7 @@ class SocketProducer:
         self.socket = None
         self.socket_address = socket_address
 
-        # Parsing configuration (extracted from config for convenience)
-        self.parse_location = config.parse_location
-        self.serialization_format = config.serialization_format
+        # Parsing configuration
         self.fields = config.fields
 
         # Statistics tracking
@@ -144,8 +135,7 @@ class SocketProducer:
         self.batch_counter = 0
 
         logging.info(
-            f"SocketProducer {producer_id} initialized: "
-            f"socket={self.socket_address}, parse_location={self.parse_location}"
+            f"SocketProducer {producer_id} initialized: socket={self.socket_address}"
         )
 
     def _connect_socket(self) -> bool:
@@ -206,45 +196,38 @@ class SocketProducer:
         import torch
 
         try:
-            # Initialize metadata variables (will be populated based on format)
+            # Parse NumPy .npz format
+            arrays = np.load(BytesIO(raw_bytes))
+
+            # Extract detector data using field mapping
+            detector_data_key = self.fields.get("detector_data", "data")
+
+            if detector_data_key not in arrays.files:
+                raise ValueError(f"Detector data key '{detector_data_key}' not found in .npz. Available keys: {arrays.files}")
+
+            detector_data = arrays[detector_data_key]
+
+            # Extract physics metadata (timestamp, photon_wavelength)
             physics_metadata = {}
+            for key in ['timestamp', 'photon_wavelength']:
+                field_key = self.fields.get(key, key)
+                if field_key in arrays.files:
+                    physics_metadata[key] = arrays[field_key]
+
+            # Extract original shape metadata for detector image reconstruction
             preprocessing_metadata = None
+            original_shape_key = self.fields.get("detector_data_original_shape", "detector_data_original_shape")
+            if original_shape_key in arrays.files:
+                original_shape_array = arrays[original_shape_key]  # [B, C, H_orig, W_orig]
+                original_shape = tuple(original_shape_array)
+                preprocessed_shape = detector_data.shape  # (B*C, 1, H, W)
 
-            if self.serialization_format == "numpy":
-                # Fast NumPy .npz parsing (3-7x faster than HDF5)
-                arrays = np.load(BytesIO(raw_bytes))
+                preprocessing_metadata = PreprocessingMetadata(
+                    original_shape=original_shape,
+                    preprocessed_shape=preprocessed_shape
+                )
 
-                # Extract detector data using field mapping
-                detector_data_key = self.fields.get("detector_data", "data")
-
-                if detector_data_key not in arrays.files:
-                    raise ValueError(f"Detector data key '{detector_data_key}' not found in .npz. Available keys: {arrays.files}")
-
-                detector_data = arrays[detector_data_key]
-
-                # NEW: Extract physics metadata (timestamp, photon_wavelength)
-                physics_metadata = {}
-                for key in ['timestamp', 'photon_wavelength']:
-                    field_key = self.fields.get(key, key)
-                    if field_key in arrays.files:
-                        physics_metadata[key] = arrays[field_key]
-
-                # NEW: Extract original shape metadata for detector image reconstruction
-                preprocessing_metadata = None
-                original_shape_key = self.fields.get("detector_data_original_shape", "detector_data_original_shape")
-                if original_shape_key in arrays.files:
-                    original_shape_array = arrays[original_shape_key]  # [B, C, H_orig, W_orig]
-                    original_shape = tuple(original_shape_array)
-                    preprocessed_shape = detector_data.shape  # (B*C, 1, H, W)
-
-                    preprocessing_metadata = PreprocessingMetadata(
-                        original_shape=original_shape,
-                        preprocessed_shape=preprocessed_shape
-                    )
-
-                arrays.close()
-            else:
-                raise ValueError(f"Unsupported serialization format: {self.serialization_format}. Only 'numpy' format is supported.")
+            arrays.close()
 
             # Convert to numpy array if needed
             if not isinstance(detector_data, np.ndarray):
@@ -259,7 +242,7 @@ class SocketProducer:
                          for i in range(detector_data.shape[0])]
 
             logging.debug(
-                f"Producer {self.producer_id}: Parsed raw {self.serialization_format} data -> {len(cpu_tensors)} tensors, "
+                f"Producer {self.producer_id}: Parsed .npz data -> {len(cpu_tensors)} tensors, "
                 f"each with shape {cpu_tensors[0].shape if cpu_tensors else 'empty'}"
             )
 
@@ -321,11 +304,9 @@ class SocketProducer:
         progress_interval: int = 10
     ) -> Dict[str, Any]:
         """
-        Main streaming loop: configurable socket→queue flow with optional parsing.
+        Main streaming loop: socket→parse→queue flow.
 
-        Supports two parsing strategies (controlled by parse_location config):
-        1. "consumer" (Q1→P): Push raw bytes, let actor parse during GPU overlap (default)
-        2. "producer" (S→Q1): Parse in producer before queueing for comparison
+        Receives data from socket, parses immediately (S→Q1 stage), and pushes to queue.
 
         Args:
             queue_manager: Pipeline input queue manager
@@ -356,16 +337,11 @@ class SocketProducer:
                     logging.info(f"Producer {self.producer_id}: Socket closed/timeout, streaming completed normally")
                     break
 
-                # STEP 2: Process data based on parse_location config
-                if self.parse_location == "producer":
-                    # S→Q1 parsing: Parse immediately before queueing
-                    data = self._parse_raw_bytes(raw_bytes)
-                    if data is None:  # None means parsing failed
-                        logging.warning(f"Producer {self.producer_id}: Parsing failed for batch {self.batch_counter}, skipping")
-                        continue
-                else:
-                    # Q1→P parsing: Create minimal wrapper, defer parsing to consumer
-                    data = self._create_raw_socket_data(raw_bytes)
+                # STEP 2: Parse immediately (S→Q1 stage)
+                data = self._parse_raw_bytes(raw_bytes)
+                if data is None:  # None means parsing failed
+                    logging.warning(f"Producer {self.producer_id}: Parsing failed for batch {self.batch_counter}, skipping")
+                    continue
 
                 # STEP 3: Push to queue directly with backpressure retry (NO extra ray.put()!)
                 backoff_delay = 0.001  # Start with 1ms delay
