@@ -1,0 +1,18 @@
+# PeakNet Pipeline - Random Data Source
+# Synthetic data generation for testing
+
+model:
+  weights_path: null
+
+runtime:
+  num_producers: 2
+  batches_per_producer: 32
+  total_samples: 1600
+  inter_batch_delay: 0.01
+
+data_source:
+  source_type: random
+
+# Usage:
+# peaknet-pipeline --config examples/configs/source-random.yaml
+# peaknet-pipeline --config examples/configs/source-random.yaml --total-samples 10240 --max-actors 8

@@ -482,23 +482,9 @@ class PeakNetPipelineActorBase:
 
                 actual_batch_size = len(cpu_tensors)
 
-                # STRICT VALIDATION: Batch size from producer MUST match configured batch_size
+                # Validate batch size matches configuration
                 if actual_batch_size != self.batch_size:
-                    error_msg = (
-                        f"❌ BATCH SIZE MISMATCH: Producer sent {actual_batch_size} samples, "
-                        f"but pipeline configured for batch_size={self.batch_size}\n"
-                        f"\n"
-                        f"   Producer-Consumer Contract Violation!\n"
-                        f"   The producer and consumer MUST agree on batch size.\n"
-                        f"\n"
-                        f"   Fix options:\n"
-                        f"   1. Update pipeline config: batch_size: {actual_batch_size}\n"
-                        f"   2. Update producer config: Ensure producer sends batches of {self.batch_size}\n"
-                        f"\n"
-                        f"   Location: Batch #{processed_count}, Actor {self.gpu_id}\n"
-                        f"   Expected: {self.batch_size} samples per batch\n"
-                        f"   Received: {actual_batch_size} samples per batch"
-                    )
+                    error_msg = f"Batch size mismatch: expected {self.batch_size}, got {actual_batch_size} (batch #{processed_count}, actor {self.gpu_id})"
                     logging.error(error_msg)
                     raise ValueError(error_msg)
 

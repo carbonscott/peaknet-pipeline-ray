@@ -1,0 +1,61 @@
+# PeakNet Pipeline - Socket Data Source
+# Configuration for streaming from LCLStreamer
+
+model:
+  weights_path: /sdf/data/lcls/ds/prj/prjcwang31/results/proj-stream-to-ml/peaknet-673m.bin
+  peaknet_config:
+    model:
+      image_size: 512
+      backbone_hidden_sizes: [352, 704, 1408, 2816]
+      backbone_depths: [3, 3, 27, 3]
+      bifpn_num_blocks: 4
+      bifpn_num_features: 512
+      seg_out_channels: 256
+      uses_learned_upsample: true
+  warmup_iterations: 10
+
+runtime:
+  max_actors: 4
+  batch_size: 128
+  pipeline_concurrency: 3
+  total_samples: null
+  queue_num_shards: 8
+  queue_maxsize_per_shard: 1600
+  queue_names:
+    input_queue: "peaknet_q1"
+    output_queue: "peaknet_q2"
+  enable_output_queue: true
+  max_empty_polls: 500
+  poll_timeout: 0.001
+
+data:
+  shape: [1, 1920, 1920]
+
+data_source:
+  source_type: socket
+  socket_addresses:
+    - ["sdfada016", 12321]
+    - ["sdfada016", 12322]
+  socket_timeout: 300.0
+  socket_retry_attempts: 5
+  serialization_format: numpy
+  parse_location: producer
+  fields:
+    detector_data: "detector_data"
+    timestamp: "timestamp"
+    photon_wavelength: "photon_wavelength"
+    detector_data_original_shape: "detector_data_original_shape"
+  batch_assembly: false
+  required_fields: ["detector_data"]
+
+precision:
+  dtype: "bfloat16"
+
+profiling:
+  enable_profiling: true
+
+ray:
+  namespace: "peaknet-pipeline"
+
+# Usage:
+# peaknet-pipeline --config examples/configs/source-socket.yaml --verbose

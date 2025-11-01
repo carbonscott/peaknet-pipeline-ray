@@ -95,9 +95,9 @@ class PeakNetPipeline:
         def signal_handler(signum, frame):
             signal_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
             if not self.config.output.quiet:
-                print(f"\n🛑 Received {signal_name} - initiating graceful shutdown...")
+                print(f"\nReceived {signal_name} - shutting down...")
                 if self.config.profiling.enable_profiling:
-                    print("   📊 Ensuring nsys profiling data is saved...")
+                    print("  Saving profiling data...")
 
             self.shutdown_event.set()
 
@@ -107,7 +107,7 @@ class PeakNetPipeline:
                     ray.get(self.coordinator.request_signal_shutdown.remote(f"{signal_name} received"))
                 except Exception as e:
                     if not self.config.output.quiet:
-                        print(f"   ⚠️  Failed to notify coordinator of shutdown: {e}")
+                        print(f"     Failed to notify coordinator of shutdown: {e}")
 
         # Store original handlers to restore them later
         self._original_sigint_handler = signal.signal(signal.SIGINT, signal_handler)
@@ -126,7 +126,7 @@ class PeakNetPipeline:
             return
 
         if not self.config.output.quiet:
-            print(f"   🎭 Gracefully shutting down {len(self.actors)} actors...")
+            print(f"    Gracefully shutting down {len(self.actors)} actors...")
 
         shutdown_futures = []
 
@@ -138,7 +138,7 @@ class PeakNetPipeline:
                 shutdown_futures.append((i, future))
             except Exception as e:
                 if self.config.output.verbose:
-                    print(f"   ⚠️  Actor {i}: Failed to send shutdown signal: {e}")
+                    print(f"     Actor {i}: Failed to send shutdown signal: {e}")
 
         # Wait for graceful shutdowns with timeout
         timeout = 10.0  # seconds
@@ -148,25 +148,25 @@ class PeakNetPipeline:
             remaining_time = timeout - (time.time() - start_time)
             if remaining_time <= 0:
                 if not self.config.output.quiet:
-                    print(f"   ⏰ Timeout waiting for actor {i} shutdown")
+                    print(f"    Timeout waiting for actor {i} shutdown")
                 break
 
             try:
                 ray.get(future, timeout=min(remaining_time, 2.0))
                 if self.config.output.verbose:
-                    print(f"   ✅ Actor {i}: Graceful shutdown completed")
+                    print(f"    Actor {i}: Graceful shutdown completed")
             except ray.exceptions.GetTimeoutError:
                 if not self.config.output.quiet:
-                    print(f"   ⏰ Actor {i}: Shutdown timeout, forcing termination")
+                    print(f"    Actor {i}: Shutdown timeout, forcing termination")
             except Exception as e:
                 if self.config.output.verbose:
-                    print(f"   ⚠️  Actor {i}: Shutdown error: {e}")
+                    print(f"     Actor {i}: Shutdown error: {e}")
 
         # Clear actor references
         self.actors.clear()
 
         if not self.config.output.quiet:
-            print("   ✅ Actor shutdown completed")
+            print("    Actor shutdown completed")
 
     def _collect_profiling_data(self) -> Dict[str, Any]:
         """Collect and validate nsys profiling data after shutdown.
@@ -222,11 +222,11 @@ class PeakNetPipeline:
                         total_size += file_size
                     else:
                         if self.config.output.verbose:
-                            print(f"   ⚠️  Skipping small profile file: {nsys_file} ({file_size} bytes)")
+                            print(f"     Skipping small profile file: {nsys_file} ({file_size} bytes)")
 
                 except OSError as e:
                     if self.config.output.verbose:
-                        print(f"   ⚠️  Cannot access profile file: {nsys_file} - {e}")
+                        print(f"     Cannot access profile file: {nsys_file} - {e}")
 
             # Copy files to output directory if specified
             copied_files = []
@@ -246,10 +246,10 @@ class PeakNetPipeline:
                         shutil.copy2(src_path, dest_path)
                         copied_files.append(str(dest_path))
                         if self.config.output.verbose:
-                            print(f"   📁 Copied profile: {dest_path}")
+                            print(f"    Copied profile: {dest_path}")
                     except Exception as e:
                         if self.config.output.verbose:
-                            print(f"   ⚠️  Failed to copy {src_path}: {e}")
+                            print(f"     Failed to copy {src_path}: {e}")
 
             return {
                 'success': True,
@@ -268,39 +268,17 @@ class PeakNetPipeline:
         if not self.config.profiling.enable_profiling or self.config.output.quiet:
             return
 
-        print("\n📊 Profiling Data Summary:")
-        print("=" * 45)
-
         if not profile_results.get('success', False):
-            print(f"❌ Failed to collect profiling data: {profile_results.get('error', 'Unknown error')}")
-            print("\n💡 Troubleshooting:")
-            print("   • Ensure nsys profiling was actually enabled (--enable-profiling)")
-            print("   • Check Ray logs for nsight profiling errors")
-            print("   • Verify actors had enough time to generate profile data")
+            print(f"\nProfiling data collection failed: {profile_results.get('error', 'Unknown')}")
             return
 
         files_found = profile_results.get('files_found', 0)
         total_size = profile_results.get('total_size_mb', 0)
-
-        print(f"✅ Successfully collected profiling data:")
-        print(f"   📁 Profile files found: {files_found}")
-        print(f"   💾 Total size: {total_size:.1f} MB")
-        print(f"   📂 Source directory: {profile_results.get('nsight_dir', 'N/A')}")
+        print(f"\nProfiling: {files_found} files ({total_size:.1f} MB) in {profile_results.get('nsight_dir', 'N/A')}")
 
         copied_files = profile_results.get('copied_files', [])
         if copied_files:
-            print(f"   📋 Copied to output directory: {len(copied_files)} files")
-            if self.config.output.verbose:
-                for copied_file in copied_files:
-                    print(f"      • {copied_file}")
-
-        print("\n💡 Next steps:")
-        print("   • Open .nsys-rep files with NVIDIA Nsight Systems GUI")
-        print("   • Use 'nsys stats <file.nsys-rep>' for command-line analysis")
-        if copied_files:
-            print(f"   • Profile files saved to: {self.config.profiling.output_dir}")
-        else:
-            print(f"   • Find original files in: {profile_results.get('nsight_dir', 'Ray logs')}")
+            print(f"Copied {len(copied_files)} files to {self.config.profiling.output_dir}")
 
     def run(self, total_samples: Optional[int] = None) -> PipelineResults:
         """
@@ -357,13 +335,13 @@ class PeakNetPipeline:
             # This should rarely be hit now since we have signal handlers
             error = "Pipeline interrupted by user"
             if not self.config.output.quiet:
-                print(f"\n⚠️  {error}")
+                print(f"\n  {error}")
             self._graceful_shutdown_actors()
 
             # Collect profiling data after graceful shutdown
             if self.config.profiling.enable_profiling:
                 if not self.config.output.quiet:
-                    print("\n📊 Collecting profiling data...")
+                    print("\n Collecting profiling data...")
                 profile_results = self._collect_profiling_data()
                 self._print_profiling_summary(profile_results)
 
@@ -372,7 +350,7 @@ class PeakNetPipeline:
         except Exception as e:
             error = f"Pipeline failed with error: {e}"
             if not self.config.output.quiet:
-                print(f"\n💥 {error}")
+                print(f"\n {error}")
                 if self.config.output.verbose:
                     import traceback
                     traceback.print_exc()
@@ -381,7 +359,7 @@ class PeakNetPipeline:
             # Collect profiling data even after exception
             if self.config.profiling.enable_profiling:
                 if not self.config.output.quiet:
-                    print("\n📊 Collecting profiling data...")
+                    print("\n Collecting profiling data...")
                 profile_results = self._collect_profiling_data()
                 self._print_profiling_summary(profile_results)
 
@@ -398,13 +376,13 @@ class PeakNetPipeline:
                 # Collect profiling data after graceful shutdown
                 if self.config.profiling.enable_profiling:
                     if not self.config.output.quiet:
-                        print("\n📊 Collecting profiling data...")
+                        print("\n Collecting profiling data...")
                     profile_results = self._collect_profiling_data()
                     self._print_profiling_summary(profile_results)
 
                 error = "Pipeline gracefully shutdown due to signal"
                 if not self.config.output.quiet:
-                    print(f"\n✅ {error}")
+                    print(f"\n {error}")
                 return PipelineResults(success=False, performance={}, error=error)
 
     def _validate_config(self) -> None:
@@ -438,57 +416,38 @@ class PeakNetPipeline:
 
     def _print_banner(self) -> None:
         """Print pipeline banner and configuration summary."""
-        print("🚀 Ray Multi-GPU PeakNet Streaming Pipeline")
-        print("=" * 55)
+        print("PeakNet Pipeline - Ray Multi-GPU Streaming")
+        print("=" * 45)
 
         if self.config.output.verbose:
-            print(f"Configuration summary:")
-            print(f"  Model: PeakNet (weights: {self.config.model.weights_path is not None})")
-            print(f"  Data: {self.config.data.shape} tensor shape")
-            num_producers_str = "auto" if self.config.runtime.num_producers is None else str(self.config.runtime.num_producers)
-            print(f"  Runtime: {self.config.runtime.batch_size} batch size, {num_producers_str} producers")
-            print(f"  System: min {self.config.system.min_gpus} GPUs required")
+            print(f"Config: batch_size={self.config.runtime.batch_size}, shape={self.config.data.shape}, min_gpus={self.config.system.min_gpus}")
             print()
 
     def _setup_gpu_environment(self) -> List[int]:
         """Set up GPU environment with health validation."""
         if self.config.system.skip_gpu_validation:
             if not self.config.output.quiet:
-                print("\n⚡ Step 1: GPU Environment Setup (Production Mode)")
-                print(f"✅ Skipping validation - trusting Ray cluster provides {self.config.system.min_gpus}+ healthy GPUs")
+                print(f"\nGPU setup: Skipping validation (assuming {self.config.system.min_gpus}+ GPUs available)")
             return list(range(self.config.system.min_gpus))
 
         if not self.config.output.quiet:
-            print("\n🔍 Step 1: GPU Health Validation")
-            if self.config.output.verbose:
-                print("   (Use --skip-gpu-validation for faster startup in production)")
+            print("\nValidating GPUs...")
 
         try:
             healthy_gpus = get_healthy_gpus_for_ray(min_gpus=self.config.system.min_gpus)
-
             if not self.config.output.quiet:
-                print(f"✅ Found {len(healthy_gpus)} healthy GPUs")
-                if self.config.output.verbose:
-                    cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')
-                    print(f"   CUDA_VISIBLE_DEVICES: {cuda_visible}")
-
+                print(f"Found {len(healthy_gpus)} healthy GPUs")
             return healthy_gpus
 
         except RuntimeError as e:
-            error_msg = f"GPU validation failed: {e}"
             if not self.config.output.quiet:
-                print(f"❌ {error_msg}")
-                print("\n💡 Troubleshooting:")
-                print("   - Ensure CUDA is available: nvidia-smi")
-                print("   - Check for GPU hardware issues")
-                print("   - Try reducing --min-gpus or --max-actors")
-                print("   - Use --skip-gpu-validation for production clusters")
-            raise RuntimeError(error_msg)
+                print(f"GPU validation failed: {e}")
+            raise
 
     def _setup_ray_cluster(self) -> None:
         """Initialize Ray cluster connection."""
         if not self.config.output.quiet:
-            print("\n⚡ Step 2: Ray Cluster Setup")
+            print("\nInitializing Ray cluster...")
 
         max_actors = self.config.runtime.max_actors
 
@@ -503,7 +462,7 @@ class PeakNetPipeline:
                 gpu_count = int(cluster_resources.get('GPU', 0))
 
                 if not self.config.output.quiet:
-                    print(f"✅ Ray cluster initialized")
+                    print(f" Ray cluster initialized")
                     print(f"   Available GPUs: {gpu_count}")
                     print(f"   CPU cores: {int(cluster_resources.get('CPU', 0))}")
 
@@ -515,14 +474,14 @@ class PeakNetPipeline:
             except Exception as e:
                 error_msg = f"Ray initialization failed: {e}"
                 if not self.config.output.quiet:
-                    print(f"❌ {error_msg}")
+                    print(f" {error_msg}")
                 raise RuntimeError(error_msg)
         else:
             cluster_resources = ray.cluster_resources()
             gpu_count = int(cluster_resources.get('GPU', 0))
 
             if not self.config.output.quiet:
-                print(f"✅ Ray cluster already running")
+                print(f" Ray cluster already running")
                 print(f"   Available GPUs: {gpu_count}")
                 print(f"   CPU cores: {int(cluster_resources.get('CPU', 0))}")
 
@@ -542,19 +501,19 @@ class PeakNetPipeline:
             actual_num_actors = min(max_actors, max_possible_actors)
             if max_actors > max_possible_actors:
                 if not self.config.output.quiet:
-                    print(f"⚠️  Requested {max_actors} actors but only {max_possible_actors} healthy GPUs available")
+                    print(f"  Requested {max_actors} actors but only {max_possible_actors} healthy GPUs available")
 
         enable_profiling = self.config.profiling.enable_profiling
         profiling_text = " (with profiling)" if enable_profiling else ""
 
         if not self.config.output.quiet:
-            print(f"\n🎭 Step 3: Creating {actual_num_actors} GPU Pipeline Actors{profiling_text}")
+            print(f"\n Step 3: Creating {actual_num_actors} GPU Pipeline Actors{profiling_text}")
             print(f"   Available healthy GPUs: {max_possible_actors}")
             if max_actors:
                 print(f"   User-specified actor limit: {max_actors}")
 
             if enable_profiling and self.config.output.verbose:
-                print("   📊 NSys profiling enabled - profile files will be generated per actor")
+                print("    NSys profiling enabled - profile files will be generated per actor")
 
         try:
             # Determine input shape based on data source configuration
@@ -562,12 +521,12 @@ class PeakNetPipeline:
                 # Socket source: use configured socket shape
                 input_shape = self.config.data_source.shape
                 if not self.config.output.quiet:
-                    print(f"   ⚡ Using configured socket shape {input_shape}")
+                    print(f"    Using configured socket shape {input_shape}")
             else:
                 # Random source: use data.shape
                 input_shape = self.config.data.shape
                 if not self.config.output.quiet:
-                    print(f"   ⚡ Using random data shape {input_shape}")
+                    print(f"    Using random data shape {input_shape}")
 
             actors = create_pipeline_actors(
                 num_actors=actual_num_actors,
@@ -592,7 +551,7 @@ class PeakNetPipeline:
             )
 
             if not self.config.output.quiet:
-                print(f"✅ Successfully created {len(actors)} GPU actors")
+                print(f" Successfully created {len(actors)} GPU actors")
 
             # Verify actor health if enabled
             if self.config.system.verify_actors:
@@ -605,7 +564,7 @@ class PeakNetPipeline:
                     healthy_count = sum(1 for h in health_results if h.get('status') == 'healthy')
 
                     if not self.config.output.quiet:
-                        print(f"   ✅ {healthy_count}/{len(actors)} actors are healthy")
+                        print(f"    {healthy_count}/{len(actors)} actors are healthy")
 
                         if self.config.output.verbose:
                             for i, health in enumerate(health_results):
@@ -615,7 +574,7 @@ class PeakNetPipeline:
 
                 except Exception as e:
                     if not self.config.output.quiet:
-                        print(f"   ⚠️  Actor health check failed: {e}")
+                        print(f"     Actor health check failed: {e}")
                         print("   Continuing anyway...")
 
             return actors
@@ -623,13 +582,13 @@ class PeakNetPipeline:
         except Exception as e:
             error_msg = f"Failed to create pipeline actors: {e}"
             if not self.config.output.quiet:
-                print(f"❌ {error_msg}")
+                print(f" {error_msg}")
             raise RuntimeError(error_msg)
 
     def _generate_streaming_data(self) -> List[Any]:
         """Generate streaming data using Ray tasks."""
         if not self.config.output.quiet:
-            print(f"\n📊 Step 4: Generating Streaming Data")
+            print(f"\n Step 4: Generating Streaming Data")
 
         # Extract config values
         runtime = self.config.runtime
@@ -677,7 +636,7 @@ class PeakNetPipeline:
             generation_rate = total_samples / generation_time
 
             if not self.config.output.quiet:
-                print(f"✅ Data generation complete:")
+                print(f" Data generation complete:")
                 print(f"   Generated: {len(all_batches)} batches ({total_samples} samples)")
                 print(f"   Time: {generation_time:.2f}s")
                 print(f"   Rate: {generation_rate:.1f} samples/s")
@@ -687,13 +646,13 @@ class PeakNetPipeline:
         except Exception as e:
             error_msg = f"Data generation failed: {e}"
             if not self.config.output.quiet:
-                print(f"❌ {error_msg}")
+                print(f" {error_msg}")
             raise RuntimeError(error_msg)
 
     def _process_streaming_data(self, actors: List[Any], all_batches: List[Any]) -> Dict[str, Any]:
         """Process streaming data across multiple GPU actors."""
         if not self.config.output.quiet:
-            print(f"\n⚡ Step 5: Multi-GPU Streaming Processing")
+            print(f"\n Step 5: Multi-GPU Streaming Processing")
             print(f"   Processing {len(all_batches)} batches across {len(actors)} GPUs")
 
         # Distribute batches across actors (round-robin)
@@ -722,7 +681,7 @@ class PeakNetPipeline:
                 # Check for shutdown signal before processing each batch
                 if self.shutdown_event.is_set():
                     if not self.config.output.quiet:
-                        print(f"\n🛑 Shutdown requested - stopping after {completed}/{total_batches} batches")
+                        print(f"\n Shutdown requested - stopping after {completed}/{total_batches} batches")
                     break
 
                 result = ray.get(future, timeout=30)
@@ -770,64 +729,18 @@ class PeakNetPipeline:
         }
 
     def _print_results(self, performance: Dict[str, Any]) -> None:
-        """Print comprehensive performance results."""
-        print("\n📈 Performance Results")
-        print("=" * 30)
-
+        """Print performance results."""
         if not performance['success']:
-            print(f"❌ Processing failed: {performance.get('error', 'Unknown error')}")
+            print(f"\nProcessing failed: {performance.get('error', 'Unknown error')}")
             return
 
-        # Overall metrics
-        print(f"✅ Overall Performance:")
-        print(f"   Total samples processed: {performance['total_samples']:,}")
-        print(f"   Total batches: {performance['total_batches']:,}")
-        print(f"   Processing time: {performance['total_processing_time']:.2f}s")
-        print(f"   Overall throughput: {performance['overall_throughput']:.1f} samples/s")
+        print(f"\nResults: {performance['total_samples']:,} samples, {performance['total_batches']:,} batches, {performance['total_processing_time']:.2f}s, {performance['overall_throughput']:.1f} samples/s")
 
-        # Per-actor breakdown
-        print(f"\n🎭 Per-Actor Performance:")
-        actor_stats = performance['actor_stats']
-
-        for actor_idx, stats in actor_stats.items():
-            actor_throughput = stats['samples'] / stats['total_time'] if stats['total_time'] > 0 else 0
-            avg_batch_time = stats['total_time'] / stats['batches'] if stats['batches'] > 0 else 0
-
-            print(f"   GPU Actor {actor_idx}:")
-            print(f"      Batches: {stats['batches']}")
-            print(f"      Samples: {stats['samples']:,}")
-            print(f"      Throughput: {actor_throughput:.1f} samples/s")
-            print(f"      Avg batch time: {avg_batch_time:.3f}s")
-
-        # Profiling information
-        if self.config.profiling.enable_profiling:
-            import os
-            tmpdir = os.environ.get('TMPDIR', '/tmp')
-            print(f"\n📊 Profiling Information:")
-            print(f"   NSys profiling: enabled")
-            print(f"   Profile files: generated per actor (nsys-rep format)")
-            print(f"   📁 Files saved to: {tmpdir}/ray/session_latest/logs/nsight/")
-            print(f"   💡 Find your .nsys-rep files in Ray's logs directory")
-            print(f"   💡 Copy files locally: cp {tmpdir}/ray/session_latest/logs/nsight/*.nsys-rep ./")
-            print(f"   💡 Analyze with: nsys-ui <file.nsys-rep> or nsys stats <file.nsys-rep>")
-
-        # Configuration summary
         if self.config.output.verbose:
-            runtime = self.config.runtime
-            data = self.config.data
-            print(f"\n⚙️  Configuration Used:")
-            print(f"   Actor limit: {'auto-scale' if runtime.max_actors is None else runtime.max_actors}")
-            print(f"   Min GPUs required: {self.config.system.min_gpus}")
-            num_producers_str = "auto" if runtime.num_producers is None else str(runtime.num_producers)
-            print(f"   Producers: {num_producers_str}")
-            print(f"   Batch size: {runtime.batch_size}")
-            print(f"   Input shape: {data.shape}")
-            print(f"   Inter-batch delay: {runtime.inter_batch_delay}s")
-            print(f"   Profiling: {'enabled' if self.config.profiling.enable_profiling else 'disabled'}")
-
-        if performance['success']:
-            print(f"\n🎉 Pipeline completed successfully!")
-            print(f"   Processed {performance['total_samples']:,} samples at {performance['overall_throughput']:.1f} samples/s")
+            actor_stats = performance['actor_stats']
+            for actor_idx, stats in actor_stats.items():
+                throughput = stats['samples'] / stats['total_time'] if stats['total_time'] > 0 else 0
+                print(f"  Actor {actor_idx}: {stats['batches']} batches, {stats['samples']:,} samples, {throughput:.1f} samples/s")
 
     def _save_results(self, performance: Dict[str, Any]) -> None:
         """Save results to output directory if specified."""
@@ -889,7 +802,7 @@ class PeakNetPipeline:
             json.dump(save_data, f, indent=2, default=str)
 
         if not self.config.output.quiet:
-            print(f"\n💾 Results saved to: {results_file}")
+            print(f"\n Results saved to: {results_file}")
 
     def run_streaming_pipeline(
         self,
@@ -946,13 +859,13 @@ class PeakNetPipeline:
         except KeyboardInterrupt:
             error = "Streaming pipeline interrupted by user"
             if not self.config.output.quiet:
-                print(f"\n⚠️  {error}")
+                print(f"\n  {error}")
             return PipelineResults(success=False, performance={}, error=error)
 
         except Exception as e:
             error = f"Streaming pipeline failed: {e}"
             if not self.config.output.quiet:
-                print(f"\n💥 {error}")
+                print(f"\n {error}")
                 if self.config.output.verbose:
                     import traceback
                     traceback.print_exc()
@@ -960,7 +873,7 @@ class PeakNetPipeline:
 
     def _print_streaming_banner(self) -> None:
         """Print streaming pipeline banner."""
-        print("🌊 Ray Multi-GPU PeakNet STREAMING Pipeline")
+        print(" Ray Multi-GPU PeakNet STREAMING Pipeline")
         print("=" * 55)
         print()
 
@@ -984,7 +897,7 @@ class PeakNetPipeline:
         from .core.streaming_producer import create_streaming_producers
 
         if not self.config.output.quiet:
-            print("\n🌊 Starting Streaming Workflow")
+            print("\n Starting Streaming Workflow")
 
         # Calculate production parameters
         runtime = self.config.runtime
@@ -1036,7 +949,7 @@ class PeakNetPipeline:
 
         # Step 2: Create Queues
         if not self.config.output.quiet:
-            print("📦 Step 2: Creating Queue Infrastructure")
+            print(" Step 2: Creating Queue Infrastructure")
 
         # Input queue (Q1) - producers -> actors
         num_shards = runtime.queue_num_shards
@@ -1063,7 +976,7 @@ class PeakNetPipeline:
 
         # Step 3: Launch Streaming Producers
         if not self.config.output.quiet:
-            print(f"🏭 Step 3: Launching Streaming Producers ({self.config.data_source.source_type})")
+            print(f" Step 3: Launching Streaming Producers ({self.config.data_source.source_type})")
 
         producers = self._create_data_producers(runtime, data)
 
@@ -1090,7 +1003,7 @@ class PeakNetPipeline:
 
         # Step 4: Launch Streaming Pipeline Actors
         if not self.config.output.quiet:
-            print("🎭 Step 4: Launching Streaming Pipeline Actors")
+            print(" Step 4: Launching Streaming Pipeline Actors")
 
         actor_tasks = []
         for i, actor in enumerate(actors):
@@ -1138,8 +1051,8 @@ class PeakNetPipeline:
         if not self.config.output.quiet:
             total_produced_samples = sum(r['total_samples'] for r in producer_results)
             total_backpressure = sum(r['backpressure_events'] for r in producer_results)
-            print(f"   ✅ All producers finished in {producer_time:.2f}s")
-            print(f"   📊 Produced: {total_produced_samples} samples, {total_backpressure} backpressure events")
+            print(f"    All producers finished in {producer_time:.2f}s")
+            print(f"    Produced: {total_produced_samples} samples, {total_backpressure} backpressure events")
 
         # Wait for actors to complete
         if not self.config.output.quiet:
@@ -1229,17 +1142,17 @@ class PeakNetPipeline:
 
     def _print_streaming_results(self, performance: Dict[str, Any]) -> None:
         """Print streaming pipeline performance results."""
-        print("\n📈 Streaming Pipeline Results")
+        print("\nStreaming Pipeline Results")
         print("=" * 40)
 
         if not performance['success']:
-            print(f"❌ Processing failed: {performance.get('error', 'Unknown error')}")
+            print(f"Processing failed: {performance.get('error', 'Unknown error')}")
             return
 
         # Overall metrics
-        print(f"🌊 Streaming Performance:")
-        print(f"   Total samples processed: {performance['total_samples']:,}")
-        print(f"   Total batches processed: {performance['total_batches']:,}")
+        print(f"Streaming Performance:")
+        print(f"  Total samples: {performance['total_samples']:,}")
+        print(f"  Total batches: {performance['total_batches']:,}")
 
         expected_samples = performance['expected_samples']
         if expected_samples is not None:
@@ -1253,20 +1166,20 @@ class PeakNetPipeline:
         print(f"   Overall throughput: {performance['overall_throughput']:.1f} samples/s")
 
         # Producer performance
-        print(f"\n🏭 Producer Performance:")
+        print(f"\n Producer Performance:")
         for i, result in enumerate(performance['producer_results']):
             print(f"   Producer {i}: {result['total_samples']:,} samples, "
                   f"{result['backpressure_events']} backpressure events")
 
         # Actor performance
-        print(f"\n🎭 Actor Performance (TRUE STREAMING - No per-batch sync!):")
+        print(f"\n Actor Performance (TRUE STREAMING - No per-batch sync!):")
         for actor_id, stats in performance['actor_stats'].items():
             print(f"   GPU Actor {actor_id}: {stats['batches']} batches, "
                   f"{stats['samples']:,} samples, {stats['throughput']:.1f} samples/s")
 
         # Queue configuration
         queue_config = performance['queue_config']
-        print(f"\n📦 Queue Configuration:")
+        print(f"\n Queue Configuration:")
         print(f"   Input queue: {queue_config['q1_shards']} shards × {queue_config['q1_maxsize_per_shard']} items")
         print(f"   Output queue: {'enabled' if queue_config['output_queue_enabled'] else 'disabled'}")
 
@@ -1274,13 +1187,13 @@ class PeakNetPipeline:
         if self.config.profiling.enable_profiling:
             import os
             tmpdir = os.environ.get('TMPDIR', '/tmp')
-            print(f"\n📊 Profiling Information:")
-            print(f"   🔍 Check nsys profile for continuous overlapping operations")
-            print(f"   ✅ Should show NO cudaStreamSynchronize blocking in hot path")
-            print(f"   📁 Profile files: {tmpdir}/ray/session_latest/logs/nsight/")
+            print(f"\n Profiling Information:")
+            print(f"    Check nsys profile for continuous overlapping operations")
+            print(f"    Should show NO cudaStreamSynchronize blocking in hot path")
+            print(f"    Profile files: {tmpdir}/ray/session_latest/logs/nsight/")
 
         if performance['success']:
-            print(f"\n🎉 Streaming Pipeline Completed Successfully!")
-            print(f"   🌊 TRUE CONTINUOUS PROCESSING: {performance['total_samples']:,} samples")
-            print(f"   ⚡ DOUBLE BUFFERING PRESERVED: No per-batch synchronization")
-            print(f"   📈 Throughput: {performance['overall_throughput']:.1f} samples/s")
+            print(f"\n Streaming Pipeline Completed Successfully!")
+            print(f"    TRUE CONTINUOUS PROCESSING: {performance['total_samples']:,} samples")
+            print(f"    DOUBLE BUFFERING PRESERVED: No per-batch synchronization")
+            print(f"    Throughput: {performance['overall_throughput']:.1f} samples/s")

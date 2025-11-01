@@ -46,6 +46,9 @@ profiling_results/
 # Test results
 test_results/
 
+# Profiling assets (PNGs, etc.)
+externals/*.png
+
 # Development notes (keep local only)
 MIX_PRECISION.md
 NOTES.md

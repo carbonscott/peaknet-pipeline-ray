@@ -1,0 +1,44 @@
+# PeakNet Pipeline - Base Configuration
+# Common settings shared across all data sources
+
+model:
+  peaknet_config:
+    model:
+      image_size: 512
+      num_channels: 1
+      num_classes: 2
+      backbone_hidden_sizes: [96, 192, 384, 768]
+      backbone_depths: [3, 3, 9, 3]
+      bifpn_num_blocks: 2
+      bifpn_num_features: 256
+      seg_out_channels: 256
+      from_scratch: false
+  warmup_iterations: 100
+
+runtime:
+  max_actors: 4
+  batch_size: 16
+  memory_sync_interval: 0
+  queue_num_shards: 4
+  queue_maxsize_per_shard: 2000
+
+data:
+  shape: [1, 512, 512]
+
+precision:
+  dtype: "float32"
+
+system:
+  min_gpus: 1
+  skip_gpu_validation: false
+  pin_memory: true
+  verify_actors: false
+
+profiling:
+  enable_profiling: false
+  output_dir: "./profiling_results"
+
+output:
+  output_dir: "./test_results"
+  verbose: true
+  quiet: false
