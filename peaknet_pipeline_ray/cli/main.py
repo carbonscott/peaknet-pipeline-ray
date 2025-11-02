@@ -7,6 +7,7 @@ with streaming data sources across multiple GPUs using Ray.
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 from typing import Optional
@@ -309,6 +310,18 @@ def main(argv: Optional[list] = None) -> int:
     if args.verbose and args.quiet:
         print("Error: --verbose and --quiet are mutually exclusive", file=sys.stderr)
         return 1
+
+    # Configure logging based on verbose flag
+    if args.verbose:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
 
     try:
         # Load configuration

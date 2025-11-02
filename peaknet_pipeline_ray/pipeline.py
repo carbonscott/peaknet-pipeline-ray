@@ -24,6 +24,9 @@ from .config.data_structures import PipelineInput, PipelineOutput
 from .core.gpu_health_validator import get_healthy_gpus_for_ray
 from .core.peaknet_ray_pipeline_actor import create_pipeline_actors
 
+# Module-level logger for categorized output
+logger = logging.getLogger(__name__)
+
 
 class PipelineResults:
     """Container for pipeline execution results."""
@@ -321,28 +324,19 @@ class PeakNetPipeline:
         """Set up GPU environment with health validation."""
         if self.config.system.skip_gpu_validation:
             if not self.config.output.quiet:
-                print(f"\nGPU setup: Skipping validation (assuming {self.config.system.min_gpus}+ GPUs available)")
+                logger.info(f"[GPU] Validation skipped (assuming {self.config.system.min_gpus}+ GPUs available)")
             return list(range(self.config.system.min_gpus))
-
-        if not self.config.output.quiet:
-            print("\nValidating GPUs...")
 
         try:
             healthy_gpus = get_healthy_gpus_for_ray(min_gpus=self.config.system.min_gpus)
-            if not self.config.output.quiet:
-                print(f"Found {len(healthy_gpus)} healthy GPUs")
             return healthy_gpus
 
         except RuntimeError as e:
-            if not self.config.output.quiet:
-                print(f"GPU validation failed: {e}")
+            logger.error(f"[GPU] Validation failed: {e}")
             raise
 
     def _setup_ray_cluster(self) -> None:
         """Initialize Ray cluster connection."""
-        if not self.config.output.quiet:
-            print("\nInitializing Ray cluster...")
-
         max_actors = self.config.runtime.max_actors
 
         # Check if the current Python process has connected to Ray
@@ -354,33 +348,26 @@ class PeakNetPipeline:
                 ray.init(namespace=self.config.ray.namespace)
                 cluster_resources = ray.cluster_resources()
                 gpu_count = int(cluster_resources.get('GPU', 0))
+                cpu_count = int(cluster_resources.get('CPU', 0))
 
                 if not self.config.output.quiet:
-                    print(f" Ray cluster initialized")
-                    print(f"   Available GPUs: {gpu_count}, CPU cores: {int(cluster_resources.get('CPU', 0))}")
-
+                    logger.info(f"[Ray] Cluster connected: {gpu_count} GPUs, {cpu_count} cores available")
                     if max_actors:
-                        print(f"   Will create up to {max_actors} actors (user limit)")
-                    else:
-                        print(f"   Will auto-scale to use all healthy GPUs")
+                        logger.debug(f"[Ray] Actor limit: {max_actors} (user-specified)")
 
             except Exception as e:
                 error_msg = f"Ray initialization failed: {e}"
-                if not self.config.output.quiet:
-                    print(f" {error_msg}")
+                logger.error(f"[Ray] {error_msg}")
                 raise RuntimeError(error_msg)
         else:
             cluster_resources = ray.cluster_resources()
             gpu_count = int(cluster_resources.get('GPU', 0))
+            cpu_count = int(cluster_resources.get('CPU', 0))
 
             if not self.config.output.quiet:
-                print(f" Ray cluster already running")
-                print(f"   Available GPUs: {gpu_count}, CPU cores: {int(cluster_resources.get('CPU', 0))}")
-
+                logger.info(f"[Ray] Cluster already running: {gpu_count} GPUs, {cpu_count} cores available")
                 if max_actors:
-                    print(f"   Will create up to {max_actors} actors (user limit)")
-                else:
-                    print(f"   Will auto-scale to use all healthy GPUs")
+                    logger.debug(f"[Ray] Actor limit: {max_actors} (user-specified)")
 
     def _create_gpu_actors(self, healthy_gpus: List[int]) -> List[Any]:
         """Create GPU pipeline actors with automatic scaling."""
@@ -393,19 +380,14 @@ class PeakNetPipeline:
             actual_num_actors = min(max_actors, max_possible_actors)
             if max_actors > max_possible_actors:
                 if not self.config.output.quiet:
-                    print(f"  Requested {max_actors} actors but only {max_possible_actors} healthy GPUs available")
+                    logger.warning(f"[Actors] Requested {max_actors} but only {max_possible_actors} GPUs available")
 
         enable_profiling = self.config.profiling.enable_profiling
-        profiling_text = " (with profiling)" if enable_profiling else ""
 
         if not self.config.output.quiet:
-            print(f"\n Step 3: Creating {actual_num_actors} GPU Pipeline Actors{profiling_text}")
-            print(f"   Available healthy GPUs: {max_possible_actors}")
-            if max_actors:
-                print(f"   User-specified actor limit: {max_actors}")
-
-            if enable_profiling and self.config.output.verbose:
-                print("    NSys profiling enabled - profile files will be generated per actor")
+            logger.info(f"[Actors] Creating {actual_num_actors} on {max_possible_actors} GPU(s)")
+            if enable_profiling:
+                logger.debug(f"[Actors] Profiling: enabled (NSys profile files will be generated)")
 
         try:
             # Determine input shape based on data source configuration
@@ -418,14 +400,14 @@ class PeakNetPipeline:
                     if self.config.model.peaknet_config and 'model' in self.config.model.peaknet_config:
                         image_size = self.config.model.peaknet_config['model'].get('image_size', 512)
                         model_input = (1, image_size, image_size)
-                        print(f"    Detector data: {detector_shape}, Model input: {model_input}")
+                        logger.debug(f"[Actors] Detector: {detector_shape}, Model: {model_input}")
                     else:
-                        print(f"    Using socket shape {detector_shape}")
+                        logger.debug(f"[Actors] Socket shape: {detector_shape}")
             else:
                 # Random source: use data.shape
                 input_shape = self.config.data.shape
                 if not self.config.output.quiet:
-                    print(f"    Using random data shape {input_shape}")
+                    logger.debug(f"[Actors] Random data shape: {input_shape}")
 
             actors = create_pipeline_actors(
                 num_actors=actual_num_actors,
@@ -449,12 +431,10 @@ class PeakNetPipeline:
             )
 
             if not self.config.output.quiet:
-                print(f" Successfully created {len(actors)} GPU actors")
+                logger.info(f"[Actors] Created {len(actors)} successfully")
 
             # Verify actor health if enabled
             if self.config.system.verify_actors:
-                if not self.config.output.quiet:
-                    print("   Verifying actor health...")
                 health_futures = [actor.health_check.remote() for actor in actors]
 
                 try:
@@ -462,25 +442,23 @@ class PeakNetPipeline:
                     healthy_count = sum(1 for h in health_results if h.get('status') == 'healthy')
 
                     if not self.config.output.quiet:
-                        print(f"    {healthy_count}/{len(actors)} actors are healthy")
+                        logger.debug(f"[Actors] Health check: {healthy_count}/{len(actors)} healthy")
 
                         if self.config.output.verbose:
                             for i, health in enumerate(health_results):
                                 gpu_id = health.get('gpu_id', 'unknown')
                                 status = health.get('status', 'unknown')
-                                print(f"      Actor {i}: GPU {gpu_id} - {status}")
+                                logger.debug(f"[Actors] Actor {i}: GPU {gpu_id} - {status}")
 
                 except Exception as e:
                     if not self.config.output.quiet:
-                        print(f"     Actor health check failed: {e}")
-                        print("   Continuing anyway...")
+                        logger.warning(f"[Actors] Health check failed: {e} (continuing anyway)")
 
             return actors
 
         except Exception as e:
             error_msg = f"Failed to create pipeline actors: {e}"
-            if not self.config.output.quiet:
-                print(f" {error_msg}")
+            logger.error(f"[Actors] {error_msg}")
             raise RuntimeError(error_msg)
 
     def _print_results(self, performance: Dict[str, Any]) -> None:
