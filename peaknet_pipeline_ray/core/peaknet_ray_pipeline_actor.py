@@ -93,7 +93,7 @@ class PeakNetPipelineActorBase:
             else:
                 logging.warning("CUDA_VISIBLE_DEVICES not set by Ray - using device 0")
 
-        logging.info(f"✅ Actor GPU assignment complete - using CUDA device {self.gpu_id}")
+        logging.info(f"Actor GPU assignment complete - using CUDA device {self.gpu_id}")
 
         # Verify CUDA_VISIBLE_DEVICES is set correctly
         cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')
@@ -109,10 +109,10 @@ class PeakNetPipelineActorBase:
                 torch.cuda.synchronize(self.gpu_id)
                 del warmup_tensor
 
-            logging.info(f"✅ CUDA context established on device {self.gpu_id}")
+            logging.info(f"CUDA context established on device {self.gpu_id}")
 
         except Exception as e:
-            logging.error(f"❌ CUDA context initialization failed: {e}")
+            logging.error(f"CUDA context initialization failed: {e}")
             raise RuntimeError(f"CUDA context failed: {e}")
 
         # Store configuration
@@ -210,7 +210,7 @@ class PeakNetPipelineActorBase:
             self._run_warmup(warmup_iterations, self.input_shape)
             self.warmup_completed = True
 
-        logging.info(f"✅ PeakNetPipelineActor initialized successfully on GPU {self.gpu_id}")
+        logging.info(f"PeakNetPipelineActor initialized successfully on GPU {self.gpu_id}")
 
 
     def health_check(self) -> Dict[str, Any]:
@@ -322,7 +322,7 @@ class PeakNetPipelineActorBase:
                     # ParsedSocketData - tensors already parsed in producer, dereference ObjectRefs
                     cpu_tensors = ray.get(batch_data.tensor_refs)
 
-                    # NEW: Extract preprocessing metadata for Q2→W reconstruction
+                    # NEW: Extract preprocessing metadata for Q2->W reconstruction
                     preprocessing_metadata = getattr(batch_data, 'preprocessing_metadata', None)
 
                     # NEW: Store preprocessed detector image for CXI writer
@@ -660,9 +660,9 @@ def create_pipeline_actors(
         try:
             actor = actor_class.remote(**pipeline_kwargs)
             actors.append(actor)
-            logging.info(f"✅ Created actor {i+1}/{num_actors}")
+            logging.info(f"Created actor {i+1}/{num_actors}")
         except Exception as e:
-            logging.error(f"❌ Failed to create actor {i+1}/{num_actors}: {e}")
+            logging.error(f"Failed to create actor {i+1}/{num_actors}: {e}")
             # Continue trying to create remaining actors
 
     if len(actors) == 0:
@@ -670,7 +670,7 @@ def create_pipeline_actors(
     elif len(actors) < num_actors:
         logging.warning(f"Only created {len(actors)}/{num_actors} requested actors")
 
-    logging.info(f"✅ Successfully created {len(actors)} pipeline actors")
+    logging.info(f"Successfully created {len(actors)} pipeline actors")
     return actors
 
 
@@ -707,7 +707,7 @@ def test_pipeline_actor():
     stats = ray.get(actor.get_statistics.remote())
     logging.info(f"Actor stats: {stats}")
 
-    logging.info("✅ Pipeline actor test passed!")
+    logging.info("Pipeline actor test passed!")
 
 
 if __name__ == "__main__":
