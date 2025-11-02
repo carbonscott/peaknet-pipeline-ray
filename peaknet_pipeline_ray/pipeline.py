@@ -96,10 +96,9 @@ class PeakNetPipeline:
         """Set up signal handlers for graceful shutdown with profiling."""
         def signal_handler(signum, frame):
             signal_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
-            if not self.config.output.quiet:
-                print(f"\nReceived {signal_name} - shutting down...")
-                if self.config.profiling.enable_profiling:
-                    print("  Saving profiling data...")
+            logger.warning(f"[Pipeline] Received {signal_name} - shutting down...")
+            if self.config.profiling.enable_profiling:
+                logger.info("[Pipeline] Saving profiling data...")
 
             self.shutdown_event.set()
 
@@ -108,8 +107,7 @@ class PeakNetPipeline:
                 try:
                     ray.get(self.coordinator.request_signal_shutdown.remote(f"{signal_name} received"))
                 except Exception as e:
-                    if not self.config.output.quiet:
-                        print(f"     Failed to notify coordinator of shutdown: {e}")
+                    logger.warning(f"[Pipeline] Failed to notify coordinator of shutdown: {e}")
 
         # Store original handlers to restore them later
         self._original_sigint_handler = signal.signal(signal.SIGINT, signal_handler)
@@ -127,8 +125,7 @@ class PeakNetPipeline:
         if not self.actors:
             return
 
-        if not self.config.output.quiet:
-            print(f"    Gracefully shutting down {len(self.actors)} actors...")
+        logger.info(f"[Actors] Shutting down {len(self.actors)} actors...")
 
         shutdown_futures = []
 
@@ -139,8 +136,7 @@ class PeakNetPipeline:
                 future = actor.graceful_shutdown.remote()
                 shutdown_futures.append((i, future))
             except Exception as e:
-                if self.config.output.verbose:
-                    print(f"     Actor {i}: Failed to send shutdown signal: {e}")
+                logger.debug(f"[Actors] Actor {i}: Failed to send shutdown signal: {e}")
 
         # Wait for graceful shutdowns with timeout
         timeout = 10.0  # seconds
@@ -149,26 +145,21 @@ class PeakNetPipeline:
         for i, future in shutdown_futures:
             remaining_time = timeout - (time.time() - start_time)
             if remaining_time <= 0:
-                if not self.config.output.quiet:
-                    print(f"    Timeout waiting for actor {i} shutdown")
+                logger.warning(f"[Actors] Timeout waiting for actor {i} shutdown")
                 break
 
             try:
                 ray.get(future, timeout=min(remaining_time, 2.0))
-                if self.config.output.verbose:
-                    print(f"    Actor {i}: Graceful shutdown completed")
+                logger.debug(f"[Actors] Actor {i}: Graceful shutdown completed")
             except ray.exceptions.GetTimeoutError:
-                if not self.config.output.quiet:
-                    print(f"    Actor {i}: Shutdown timeout, forcing termination")
+                logger.warning(f"[Actors] Actor {i}: Shutdown timeout, forcing termination")
             except Exception as e:
-                if self.config.output.verbose:
-                    print(f"     Actor {i}: Shutdown error: {e}")
+                logger.debug(f"[Actors] Actor {i}: Shutdown error: {e}")
 
         # Clear actor references
         self.actors.clear()
 
-        if not self.config.output.quiet:
-            print("    Actor shutdown completed")
+        logger.info("[Actors] Shutdown completed")
 
     def _collect_profiling_data(self) -> Dict[str, Any]:
         """Collect and validate nsys profiling data after shutdown.
@@ -223,12 +214,10 @@ class PeakNetPipeline:
                         })
                         total_size += file_size
                     else:
-                        if self.config.output.verbose:
-                            print(f"     Skipping small profile file: {nsys_file} ({file_size} bytes)")
+                        logger.debug(f"[Pipeline] Skipping small profile file: {nsys_file} ({file_size} bytes)")
 
                 except OSError as e:
-                    if self.config.output.verbose:
-                        print(f"     Cannot access profile file: {nsys_file} - {e}")
+                    logger.debug(f"[Pipeline] Cannot access profile file: {nsys_file} - {e}")
 
             # Copy files to output directory if specified
             copied_files = []
@@ -247,11 +236,9 @@ class PeakNetPipeline:
                     try:
                         shutil.copy2(src_path, dest_path)
                         copied_files.append(str(dest_path))
-                        if self.config.output.verbose:
-                            print(f"    Copied profile: {dest_path}")
+                        logger.debug(f"[Pipeline] Copied profile: {dest_path}")
                     except Exception as e:
-                        if self.config.output.verbose:
-                            print(f"     Failed to copy {src_path}: {e}")
+                        logger.debug(f"[Pipeline] Failed to copy {src_path}: {e}")
 
             return {
                 'success': True,
@@ -271,16 +258,16 @@ class PeakNetPipeline:
             return
 
         if not profile_results.get('success', False):
-            print(f"\nProfiling data collection failed: {profile_results.get('error', 'Unknown')}")
+            logger.error(f"[Pipeline] Profiling data collection failed: {profile_results.get('error', 'Unknown')}")
             return
 
         files_found = profile_results.get('files_found', 0)
         total_size = profile_results.get('total_size_mb', 0)
-        print(f"\nProfiling: {files_found} files ({total_size:.1f} MB) in {profile_results.get('nsight_dir', 'N/A')}")
+        logger.info(f"[Pipeline] Profiling: {files_found} files ({total_size:.1f} MB) in {profile_results.get('nsight_dir', 'N/A')}")
 
         copied_files = profile_results.get('copied_files', [])
         if copied_files:
-            print(f"Copied {len(copied_files)} files to {self.config.profiling.output_dir}")
+            logger.info(f"[Pipeline] Copied {len(copied_files)} files to {self.config.profiling.output_dir}")
 
     def _validate_config(self) -> None:
         """Validate configuration parameters."""
@@ -310,15 +297,6 @@ class PeakNetPipeline:
 
         if runtime.inter_batch_delay < 0:
             raise ValueError("inter_batch_delay cannot be negative")
-
-    def _print_banner(self) -> None:
-        """Print pipeline banner and configuration summary."""
-        print("PeakNet Pipeline - Ray Multi-GPU Streaming")
-        print("=" * 45)
-
-        if self.config.output.verbose:
-            print(f"Config: batch_size={self.config.runtime.batch_size}, shape={self.config.data.shape}, min_gpus={self.config.system.min_gpus}")
-            print()
 
     def _setup_gpu_environment(self) -> List[int]:
         """Set up GPU environment with health validation."""
@@ -464,16 +442,16 @@ class PeakNetPipeline:
     def _print_results(self, performance: Dict[str, Any]) -> None:
         """Print performance results."""
         if not performance['success']:
-            print(f"\nProcessing failed: {performance.get('error', 'Unknown error')}")
+            logger.error(f"[Pipeline] Processing failed: {performance.get('error', 'Unknown error')}")
             return
 
-        print(f"\nResults: {performance['total_samples']:,} samples, {performance['total_batches']:,} batches, {performance['total_processing_time']:.2f}s, {performance['overall_throughput']:.1f} samples/s")
+        logger.info(f"[Pipeline] Completed: {performance['total_samples']:,} samples, {performance['total_batches']:,} batches, {performance['total_processing_time']:.2f}s, {performance['overall_throughput']:.1f} samples/s")
 
         if self.config.output.verbose:
             actor_stats = performance['actor_stats']
             for actor_idx, stats in actor_stats.items():
                 throughput = stats['samples'] / stats['total_time'] if stats['total_time'] > 0 else 0
-                print(f"  Actor {actor_idx}: {stats['batches']} batches, {stats['samples']:,} samples, {throughput:.1f} samples/s")
+                logger.debug(f"[Pipeline] Actor {actor_idx}: {stats['batches']} batches, {stats['samples']:,} samples, {throughput:.1f} samples/s")
 
     def _save_results(self, performance: Dict[str, Any]) -> None:
         """Save results to output directory if specified."""
@@ -535,7 +513,7 @@ class PeakNetPipeline:
             json.dump(save_data, f, indent=2, default=str)
 
         if not self.config.output.quiet:
-            print(f"\n Results saved to: {results_file}")
+            logger.info(f"[Pipeline] Results saved to: {results_file}")
 
     def run_streaming_pipeline(
         self,
@@ -591,38 +569,32 @@ class PeakNetPipeline:
 
         except KeyboardInterrupt:
             error = "Streaming pipeline interrupted by user"
-            if not self.config.output.quiet:
-                print(f"\n  {error}")
+            logger.warning(f"[Pipeline] {error}")
             return PipelineResults(success=False, performance={}, error=error)
 
         except Exception as e:
             error = f"Streaming pipeline failed: {e}"
-            if not self.config.output.quiet:
-                print(f"\n {error}")
-                if self.config.output.verbose:
-                    import traceback
-                    traceback.print_exc()
+            logger.error(f"[Pipeline] {error}")
+            if self.config.output.verbose:
+                import traceback
+                traceback.print_exc()
             return PipelineResults(success=False, performance={}, error=str(e))
 
     def _print_streaming_banner(self) -> None:
         """Print streaming pipeline banner."""
-        print(" Ray Multi-GPU PeakNet STREAMING Pipeline")
-        print("=" * 55)
-        print()
+        logger.info("[Pipeline] PeakNet v0.2.2-dev-min starting")
 
         if self.config.output.verbose:
-            print(f"Configuration:")
-            print(f"  Model: PeakNet (weights: {self.config.model.weights_path is not None})")
             # Show actual model input shape (from image_size) for PeakNet, or data.shape for no-op mode
             if self.config.model.peaknet_config and 'model' in self.config.model.peaknet_config:
                 image_size = self.config.model.peaknet_config['model'].get('image_size', 512)
-                print(f"  Model input: [1, {image_size}, {image_size}] tensor shape")
+                logger.debug(f"[Pipeline] Model: PeakNet, input shape [1, {image_size}, {image_size}], weights loaded: {self.config.model.weights_path is not None}")
             else:
-                print(f"  Data: {self.config.data.shape} tensor shape")
+                logger.debug(f"[Pipeline] Data shape: {self.config.data.shape}")
+
             num_producers_str = "auto" if self.config.runtime.num_producers is None else str(self.config.runtime.num_producers)
-            print(f"  Runtime: {self.config.runtime.batch_size} batch size, {num_producers_str} producers")
-            print(f"  System: min {self.config.system.min_gpus} GPUs required")
-            print()
+            logger.debug(f"[Pipeline] Runtime: batch_size={self.config.runtime.batch_size}, producers={num_producers_str}")
+            logger.debug(f"[Pipeline] System: min_gpus={self.config.system.min_gpus}")
 
     def _run_streaming_workflow(
         self, 
@@ -633,9 +605,6 @@ class PeakNetPipeline:
         from .utils.queue import ShardedQueueManager
         from .core.coordinator import create_streaming_coordinator
         from .core.streaming_producer import create_streaming_producers
-
-        if not self.config.output.quiet:
-            print("\n Starting Streaming Workflow")
 
         # Calculate production parameters
         runtime = self.config.runtime
@@ -662,26 +631,20 @@ class PeakNetPipeline:
             total_expected_samples = total_expected_batches * runtime.batch_size
 
         if not self.config.output.quiet:
-            print(f"   Producers: {actual_num_producers}")
-            print(f"   Actors: {len(actors)}")
             if self.config.data_source.source_type == "socket":
-                print(f"   Batches per producer: unlimited (stream until socket closes)")
-                print(f"   Expected total: unknown (continuous streaming)")
+                logger.info(f"[Streaming] Workflow starting: {actual_num_producers} socket producers, {len(actors)} actors (continuous)")
             else:
-                print(f"   Batches per producer: {batches_per_producer}")
-                print(f"   Expected total: {total_expected_batches} batches, {total_expected_samples} samples")
+                logger.info(f"[Streaming] Workflow starting: {actual_num_producers} producers, {len(actors)} actors")
+                logger.debug(f"[Streaming] Expected: {batches_per_producer} batches/producer, {total_expected_batches} total batches, {total_expected_samples} samples")
+
             # Show actual model input shape (from image_size) for PeakNet, or data.shape for no-op mode
             if self.config.model.peaknet_config and 'model' in self.config.model.peaknet_config:
                 image_size = self.config.model.peaknet_config['model'].get('image_size', 512)
-                print(f"   Model input shape: [1, {image_size}, {image_size}]")
+                logger.debug(f"[Streaming] Model input: [1, {image_size}, {image_size}], inter-batch delay: {runtime.inter_batch_delay}s")
             else:
-                print(f"   Model input shape: {data.shape}")
-            print(f"   Inter-batch delay: {runtime.inter_batch_delay}s")
+                logger.debug(f"[Streaming] Model input: {data.shape}, inter-batch delay: {runtime.inter_batch_delay}s")
 
-        # Step 1: Create Coordinator
-        if not self.config.output.quiet:
-            print("\n📡 Step 1: Creating Streaming Coordinator")
-
+        # Create Coordinator
         coordinator = create_streaming_coordinator(
             expected_producers=actual_num_producers,
             expected_actors=len(actors)
@@ -689,12 +652,9 @@ class PeakNetPipeline:
 
         # Store coordinator reference for signal handling
         self.coordinator = coordinator
+        logger.debug(f"[Coordinator] Created for {actual_num_producers} producers, {len(actors)} actors")
 
-        # Step 2: Create Queues
-        if not self.config.output.quiet:
-            print(" Step 2: Creating Queue Infrastructure")
-
-        # Input queue (Q1) - producers -> actors
+        # Create Queues
         num_shards = runtime.queue_num_shards
         maxsize_per_shard = runtime.queue_maxsize_per_shard
 
@@ -713,13 +673,14 @@ class PeakNetPipeline:
             )
 
         if not self.config.output.quiet:
-            print(f"   Q1 (input): {num_shards} shards, {maxsize_per_shard} items/shard")
             if enable_output_queue:
-                print(f"   Q2 (output): {num_shards} shards, {maxsize_per_shard} items/shard")
+                logger.info(f"[Queue] Q1 (input) and Q2 (output): {num_shards} shards, {maxsize_per_shard} items/shard")
+            else:
+                logger.info(f"[Queue] Q1 (input): {num_shards} shards, {maxsize_per_shard} items/shard")
 
-        # Step 3: Launch Streaming Producers
+        # Launch Streaming Producers
         if not self.config.output.quiet:
-            print(f" Step 3: Launching Streaming Producers ({self.config.data_source.source_type})")
+            logger.info(f"[Producers] Launching {actual_num_producers} {self.config.data_source.source_type} producers")
 
         producers = self._create_data_producers(runtime, data)
 
@@ -744,9 +705,8 @@ class PeakNetPipeline:
                 )
             producer_tasks.append(task)
 
-        # Step 4: Launch Streaming Pipeline Actors
-        if not self.config.output.quiet:
-            print(" Step 4: Launching Streaming Pipeline Actors")
+        # Launch Streaming Pipeline Actors
+        logger.debug(f"[Actors] Launching {len(actors)} actors with memory_sync_interval={runtime.memory_sync_interval}")
 
         actor_tasks = []
         for i, actor in enumerate(actors):
@@ -760,15 +720,14 @@ class PeakNetPipeline:
             )
             actor_tasks.append(task)
 
-        # Step 5: Monitor and Wait for Completion
+        # Monitor and Wait for Completion
         if not self.config.output.quiet:
-            print("⏳ Step 5: Streaming Processing (Real-time)")
+            logger.info("[Streaming] Processing started (real-time)")
 
         start_time = time.time()
 
         # Wait for producers to complete
-        if not self.config.output.quiet:
-            print("\n   Waiting for producers to finish...")
+        logger.debug("[Producers] Waiting for producers to finish...")
 
         # Get results from all producers (some may already be completed)
         remaining_tasks = []
@@ -794,12 +753,10 @@ class PeakNetPipeline:
         if not self.config.output.quiet:
             total_produced_samples = sum(r['total_samples'] for r in producer_results)
             total_backpressure = sum(r['backpressure_events'] for r in producer_results)
-            print(f"    All producers finished in {producer_time:.2f}s")
-            print(f"    Produced: {total_produced_samples} samples, {total_backpressure} backpressure events")
+            logger.info(f"[Producers] Finished in {producer_time:.2f}s: {total_produced_samples} samples, {total_backpressure} backpressure events")
 
         # Wait for actors to complete
-        if not self.config.output.quiet:
-            print("   Waiting for actors to finish processing...")
+        logger.debug("[Actors] Waiting for actors to finish processing...")
 
         actor_results = ray.get(actor_tasks)
         total_time = time.time() - start_time
@@ -856,12 +813,12 @@ class PeakNetPipeline:
                 num_sockets = len(self.config.data_source.socket_addresses) if self.config.data_source.socket_addresses else 0
                 if num_sockets == 1:
                     host, port = self.config.data_source.socket_addresses[0]
-                    print(f"   Socket: {host}:{port}")
+                    logger.debug(f"[Producers] Socket source: {host}:{port}")
                 else:
-                    print(f"   Sockets: {num_sockets} addresses (1 producer per socket)")
+                    logger.debug(f"[Producers] Socket sources: {num_sockets} addresses (1 producer/socket)")
                     for i, (host, port) in enumerate(self.config.data_source.socket_addresses):
-                        print(f"      [{i}] {host}:{port}")
-                print(f"   Optimization: Raw bytes → Pipeline parsing for zero gaps")
+                        logger.debug(f"[Producers]   [{i}] {host}:{port}")
+                logger.debug(f"[Producers] Optimization: Raw bytes with pipeline parsing for zero-gap streaming")
 
             return create_socket_producers(
                 num_producers=runtime.num_producers,
@@ -873,7 +830,7 @@ class PeakNetPipeline:
             from .core.streaming_producer import create_streaming_producers
 
             if not self.config.output.quiet:
-                print(f"   Random data: {data.shape}")
+                logger.debug(f"[Producers] Random data source: {data.shape}")
 
             return create_streaming_producers(
                 num_producers=runtime.num_producers,
@@ -886,11 +843,11 @@ class PeakNetPipeline:
     def _print_streaming_results(self, performance: Dict[str, Any]) -> None:
         """Print streaming pipeline performance results."""
         if not performance['success']:
-            print(f"\nProcessing failed: {performance.get('error', 'Unknown')}")
+            logger.error(f"[Pipeline] Processing failed: {performance.get('error', 'Unknown')}")
             return
 
-        print(f"\nResults: {performance['total_samples']:,} samples in {performance['total_processing_time']:.2f}s ({performance['overall_throughput']:.1f} samples/s)")
+        logger.info(f"[Pipeline] Completed: {performance['total_samples']:,} samples in {performance['total_processing_time']:.2f}s ({performance['overall_throughput']:.1f} samples/s)")
 
         if self.config.output.verbose:
             for actor_id, stats in performance['actor_stats'].items():
-                print(f"  Actor {actor_id}: {stats['samples']:,} samples, {stats['throughput']:.1f} samples/s")
+                logger.debug(f"[Pipeline] Actor {actor_id}: {stats['samples']:,} samples, {stats['throughput']:.1f} samples/s")
