@@ -314,38 +314,6 @@ def main(argv: Optional[list] = None) -> int:
         # Load configuration
         config = load_config(args)
 
-        # Print configuration if verbose
-        if config.output.verbose:
-            print("Pipeline Configuration:")
-            print(f"  Model weights: {config.model.weights_path}")
-            print(f"  Max actors: {config.runtime.max_actors}")
-            print(f"  Batch size: {config.runtime.batch_size}")
-            print(f"  Total samples: {config.runtime.total_samples}")
-            print(f"  Queue shards: {config.runtime.queue_num_shards}")
-            print(f"  Queue size per shard: {config.runtime.queue_maxsize_per_shard}")
-            print(f"  Total queue capacity: {config.runtime.queue_num_shards * config.runtime.queue_maxsize_per_shard}")
-            print(f"  Coordination timing: {config.runtime.max_empty_polls} polls × {config.runtime.poll_timeout*1000:.1f}ms = {config.runtime.max_empty_polls * config.runtime.poll_timeout:.1f}s delay")
-            # Show actual model input shape (from image_size) for PeakNet, or data.shape for no-op mode
-            if config.model.peaknet_config and 'model' in config.model.peaknet_config:
-                image_size = config.model.peaknet_config['model'].get('image_size', 512)
-                print(f"  Model input shape: [1, {image_size}, {image_size}]")
-            else:
-                print(f"  Model input shape: {config.data.shape}")
-            print(f"  Data source: {config.data_source.source_type}")
-            if config.data_source.source_type == "socket":
-                if config.data_source.socket_addresses:
-                    num_sockets = len(config.data_source.socket_addresses)
-                    if num_sockets == 1:
-                        host, port = config.data_source.socket_addresses[0]
-                        print(f"  Socket: {host}:{port}")
-                    else:
-                        print(f"  Sockets: {num_sockets} addresses")
-                        for i, (host, port) in enumerate(config.data_source.socket_addresses):
-                            print(f"    [{i}] {host}:{port}")
-                print(f"  Note: total_samples parameter is ignored for socket data sources")
-            print(f"  Min GPUs: {config.system.min_gpus}")
-            print(f"  Profiling: {config.profiling.enable_profiling}")
-
         # Import and run the actual pipeline
         from ..pipeline import PeakNetPipeline
 
