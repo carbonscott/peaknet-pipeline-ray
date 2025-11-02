@@ -317,7 +317,6 @@ def main(argv: Optional[list] = None) -> int:
         # Print configuration if verbose
         if config.output.verbose:
             print("Pipeline Configuration:")
-            print(f"  Model YAML: {config.model.yaml_path}")
             print(f"  Model weights: {config.model.weights_path}")
             print(f"  Max actors: {config.runtime.max_actors}")
             print(f"  Batch size: {config.runtime.batch_size}")
@@ -326,7 +325,12 @@ def main(argv: Optional[list] = None) -> int:
             print(f"  Queue size per shard: {config.runtime.queue_maxsize_per_shard}")
             print(f"  Total queue capacity: {config.runtime.queue_num_shards * config.runtime.queue_maxsize_per_shard}")
             print(f"  Coordination timing: {config.runtime.max_empty_polls} polls × {config.runtime.poll_timeout*1000:.1f}ms = {config.runtime.max_empty_polls * config.runtime.poll_timeout:.1f}s delay")
-            print(f"  Data shape: {config.data.shape}")
+            # Show actual model input shape (from image_size) for PeakNet, or data.shape for no-op mode
+            if config.model.peaknet_config and 'model' in config.model.peaknet_config:
+                image_size = config.model.peaknet_config['model'].get('image_size', 512)
+                print(f"  Model input shape: [1, {image_size}, {image_size}]")
+            else:
+                print(f"  Model input shape: {config.data.shape}")
             print(f"  Data source: {config.data_source.source_type}")
             if config.data_source.source_type == "socket":
                 if config.data_source.socket_addresses:

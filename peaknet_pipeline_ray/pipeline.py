@@ -410,10 +410,17 @@ class PeakNetPipeline:
         try:
             # Determine input shape based on data source configuration
             if self.config.data_source.source_type == "socket":
-                # Socket source: use configured socket shape
-                input_shape = self.config.data_source.shape
+                # Socket source: detector shape from config (may be overridden by model's image_size)
+                detector_shape = self.config.data_source.shape
+                input_shape = detector_shape
                 if not self.config.output.quiet:
-                    print(f"    Using configured socket shape {input_shape}")
+                    # Show both detector size and actual model input (if PeakNet mode)
+                    if self.config.model.peaknet_config and 'model' in self.config.model.peaknet_config:
+                        image_size = self.config.model.peaknet_config['model'].get('image_size', 512)
+                        model_input = (1, image_size, image_size)
+                        print(f"    Detector data: {detector_shape}, Model input: {model_input}")
+                    else:
+                        print(f"    Using socket shape {detector_shape}")
             else:
                 # Random source: use data.shape
                 input_shape = self.config.data.shape
@@ -628,7 +635,12 @@ class PeakNetPipeline:
         if self.config.output.verbose:
             print(f"Configuration:")
             print(f"  Model: PeakNet (weights: {self.config.model.weights_path is not None})")
-            print(f"  Data: {self.config.data.shape} tensor shape")
+            # Show actual model input shape (from image_size) for PeakNet, or data.shape for no-op mode
+            if self.config.model.peaknet_config and 'model' in self.config.model.peaknet_config:
+                image_size = self.config.model.peaknet_config['model'].get('image_size', 512)
+                print(f"  Model input: [1, {image_size}, {image_size}] tensor shape")
+            else:
+                print(f"  Data: {self.config.data.shape} tensor shape")
             num_producers_str = "auto" if self.config.runtime.num_producers is None else str(self.config.runtime.num_producers)
             print(f"  Runtime: {self.config.runtime.batch_size} batch size, {num_producers_str} producers")
             print(f"  System: min {self.config.system.min_gpus} GPUs required")
@@ -680,7 +692,12 @@ class PeakNetPipeline:
             else:
                 print(f"   Batches per producer: {batches_per_producer}")
                 print(f"   Expected total: {total_expected_batches} batches, {total_expected_samples} samples")
-            print(f"   Input shape: {data.shape}")
+            # Show actual model input shape (from image_size) for PeakNet, or data.shape for no-op mode
+            if self.config.model.peaknet_config and 'model' in self.config.model.peaknet_config:
+                image_size = self.config.model.peaknet_config['model'].get('image_size', 512)
+                print(f"   Model input shape: [1, {image_size}, {image_size}]")
+            else:
+                print(f"   Model input shape: {data.shape}")
             print(f"   Inter-batch delay: {runtime.inter_batch_delay}s")
 
         # Step 1: Create Coordinator
