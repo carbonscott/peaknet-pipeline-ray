@@ -102,8 +102,6 @@ def validate_all_gpus() -> Dict[str, Any]:
     Returns:
         Dict with validation summary and per-GPU results
     """
-    logging.info("=== Starting System-Wide GPU Health Validation ===")
-
     # Check CUDA availability
     if not torch.cuda.is_available():
         return {
@@ -115,7 +113,7 @@ def validate_all_gpus() -> Dict[str, Any]:
         }
 
     total_gpus = torch.cuda.device_count()
-    logging.info(f"Found {total_gpus} CUDA devices to validate")
+    logging.info(f"GPU validation: testing {total_gpus} device(s)")
 
     healthy_gpus = []
     unhealthy_gpus = []
@@ -123,23 +121,18 @@ def validate_all_gpus() -> Dict[str, Any]:
 
     # Test each GPU
     for gpu_id in range(total_gpus):
-        logging.info(f"Testing GPU {gpu_id}...")
-
         result = comprehensive_gpu_health_check(gpu_id)
         gpu_results[gpu_id] = result
 
         if result['healthy']:
             healthy_gpus.append(gpu_id)
-            tests_passed = len(result['tests_passed'])
             compute_time = result['metrics'].get('compute_time_ms', 0)
-            logging.info(f"✅ GPU {gpu_id}: HEALTHY ({tests_passed} tests passed, "
-                        f"{compute_time:.1f}ms compute)")
+            logging.debug(f"GPU {gpu_id}: healthy ({compute_time:.1f}ms)")
         else:
             unhealthy_gpus.append(gpu_id)
             error = result['error'][:100] if result['error'] else 'Unknown error'
             failed_tests = ', '.join(result['tests_failed'])
-            logging.warning(f"❌ GPU {gpu_id}: UNHEALTHY - {error}")
-            logging.warning(f"   Failed tests: {failed_tests}")
+            logging.warning(f"GPU {gpu_id}: UNHEALTHY - {error} (failed: {failed_tests})")
 
     # Summary
     validation_result = {
@@ -150,16 +143,13 @@ def validate_all_gpus() -> Dict[str, Any]:
         'gpu_results': gpu_results
     }
 
-    logging.info(f"\n=== GPU Validation Summary ===")
-    logging.info(f"Total GPUs: {total_gpus}")
-    logging.info(f"Healthy GPUs: {len(healthy_gpus)} {healthy_gpus}")
-    logging.info(f"Unhealthy GPUs: {len(unhealthy_gpus)} {unhealthy_gpus}")
-
     if len(healthy_gpus) == 0:
         validation_result['error'] = 'No healthy GPUs found'
-        logging.error("❌ VALIDATION FAILED: No healthy GPUs available")
+        logging.error(f"GPU validation: 0/{total_gpus} healthy")
     else:
-        logging.info(f"✅ VALIDATION SUCCESS: {len(healthy_gpus)} healthy GPUs ready")
+        # Show summary with compute time for first healthy GPU
+        first_gpu_time = gpu_results[healthy_gpus[0]]['metrics'].get('compute_time_ms', 0)
+        logging.info(f"GPU validation: {len(healthy_gpus)}/{total_gpus} healthy [GPU {healthy_gpus[0]}: {first_gpu_time:.1f}ms]")
 
     return validation_result
 
@@ -184,12 +174,8 @@ def configure_cuda_for_healthy_gpus(healthy_gpu_ids: List[int]) -> bool:
     # Set environment variable
     os.environ['CUDA_VISIBLE_DEVICES'] = cuda_devices
 
-    logging.info(f"Configured CUDA_VISIBLE_DEVICES='{cuda_devices}'")
-    logging.info(f"Ray will now only see {len(healthy_gpu_ids)} healthy GPUs")
-
     # Note: CUDA context verification will happen in child processes
-    # PyTorch/CUDA needs to be restarted to see the new CUDA_VISIBLE_DEVICES
-    logging.info(f"✅ CUDA_VISIBLE_DEVICES configured - child processes will see {len(healthy_gpu_ids)} GPUs")
+    logging.debug(f"Configured CUDA_VISIBLE_DEVICES='{cuda_devices}' for Ray actors")
     return True
 
 
@@ -226,8 +212,7 @@ def get_healthy_gpus_for_ray(min_gpus: int = 1) -> List[int]:
     # Return the remapped GPU IDs (0, 1, 2, ... in CUDA_VISIBLE_DEVICES space)
     remapped_gpu_ids = list(range(len(healthy_gpus)))
 
-    logging.info(f"Ray will see GPUs as: {remapped_gpu_ids}")
-    logging.info(f"These map to physical GPUs: {healthy_gpus}")
+    logging.debug(f"Ray GPU remapping: {remapped_gpu_ids} -> physical GPUs {healthy_gpus}")
 
     return remapped_gpu_ids
 
