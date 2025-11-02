@@ -9,6 +9,7 @@ runtime:
   batches_per_producer: 32
   total_samples: 1600
   inter_batch_delay: 0.01
+  pipeline_concurrency: 2  # 2=double, 3=triple, 4+=quad+ buffering
 
 data_source:
   source_type: random
