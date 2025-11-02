@@ -211,8 +211,6 @@ class PeakNetPipelineActorBase:
             self.warmup_completed = True
 
         logging.info(f"✅ PeakNetPipelineActor initialized successfully on GPU {self.gpu_id}")
-        logging.info(f"Model: peaknet_config={peaknet_config is not None}, compile_mode={compile_mode}, warmup_iterations={warmup_iterations}")
-        logging.info(f"Shapes: input_shape={self.input_shape}, output_shape={self.output_shape}")
 
 
     def health_check(self) -> Dict[str, Any]:
@@ -653,8 +651,6 @@ def create_pipeline_actors(
 
     # GPU validation is now handled at system level before Ray initialization
     # All GPUs Ray sees are guaranteed healthy
-    if validate_gpus:
-        logging.info("GPU health validation handled at system level - all Ray GPUs are pre-validated")
 
     # Choose actor class based on profiling preference
     actor_class = PeakNetPipelineActorWithProfiling if enable_profiling else PeakNetPipelineActor

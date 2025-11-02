@@ -357,8 +357,7 @@ class PeakNetPipeline:
 
                 if not self.config.output.quiet:
                     print(f" Ray cluster initialized")
-                    print(f"   Available GPUs: {gpu_count}")
-                    print(f"   CPU cores: {int(cluster_resources.get('CPU', 0))}")
+                    print(f"   Available GPUs: {gpu_count}, CPU cores: {int(cluster_resources.get('CPU', 0))}")
 
                     if max_actors:
                         print(f"   Will create up to {max_actors} actors (user limit)")
@@ -376,8 +375,7 @@ class PeakNetPipeline:
 
             if not self.config.output.quiet:
                 print(f" Ray cluster already running")
-                print(f"   Available GPUs: {gpu_count}")
-                print(f"   CPU cores: {int(cluster_resources.get('CPU', 0))}")
+                print(f"   Available GPUs: {gpu_count}, CPU cores: {int(cluster_resources.get('CPU', 0))}")
 
                 if max_actors:
                     print(f"   Will create up to {max_actors} actors (user limit)")
