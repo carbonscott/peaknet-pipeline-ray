@@ -652,13 +652,23 @@ def create_pipeline_actors(
     # GPU validation is now handled at system level before Ray initialization
     # All GPUs Ray sees are guaranteed healthy
 
+    # Pass CUDA_VISIBLE_DEVICES to actors so they respect user's GPU selection
+    cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', '')
+    actor_runtime_env = {}
+    if cuda_visible:
+        actor_runtime_env['env_vars'] = {'CUDA_VISIBLE_DEVICES': cuda_visible}
+        logging.info(f"Passing CUDA_VISIBLE_DEVICES={cuda_visible} to actors")
+
     # Choose actor class based on profiling preference
     actor_class = PeakNetPipelineActorWithProfiling if enable_profiling else PeakNetPipelineActor
 
     actors = []
     for i in range(num_actors):
         try:
-            actor = actor_class.remote(**pipeline_kwargs)
+            if actor_runtime_env:
+                actor = actor_class.options(runtime_env=actor_runtime_env).remote(**pipeline_kwargs)
+            else:
+                actor = actor_class.remote(**pipeline_kwargs)
             actors.append(actor)
             logging.info(f"Created actor {i+1}/{num_actors}")
         except Exception as e:

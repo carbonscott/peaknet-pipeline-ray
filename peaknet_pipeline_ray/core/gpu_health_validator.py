@@ -192,6 +192,9 @@ def get_healthy_gpus_for_ray(min_gpus: int = 1) -> List[int]:
     Raises:
         RuntimeError: If insufficient healthy GPUs found
     """
+    # Capture user's CUDA_VISIBLE_DEVICES before validation
+    user_cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', '')
+
     # Validate all GPUs
     validation_result = validate_all_gpus()
 
@@ -205,14 +208,18 @@ def get_healthy_gpus_for_ray(min_gpus: int = 1) -> List[int]:
         raise RuntimeError(f"Need at least {min_gpus} healthy GPUs, "
                           f"but only {len(healthy_gpus)} found: {healthy_gpus}")
 
-    # Configure CUDA to only see healthy GPUs
-    if not configure_cuda_for_healthy_gpus(healthy_gpus):
-        raise RuntimeError("Failed to configure CUDA for healthy GPUs")
+    # If user already set CUDA_VISIBLE_DEVICES, respect it - don't overwrite
+    if user_cuda_visible:
+        logging.info(f"Respecting user CUDA_VISIBLE_DEVICES={user_cuda_visible}")
+    else:
+        # No user preference - configure CUDA to only see healthy GPUs
+        if not configure_cuda_for_healthy_gpus(healthy_gpus):
+            raise RuntimeError("Failed to configure CUDA for healthy GPUs")
 
     # Return the remapped GPU IDs (0, 1, 2, ... in CUDA_VISIBLE_DEVICES space)
     remapped_gpu_ids = list(range(len(healthy_gpus)))
 
-    logging.debug(f"Ray GPU remapping: {remapped_gpu_ids} -> physical GPUs {healthy_gpus}")
+    logging.debug(f"Ray GPU remapping: {remapped_gpu_ids} -> {len(healthy_gpus)} GPUs")
 
     return remapped_gpu_ids
 
