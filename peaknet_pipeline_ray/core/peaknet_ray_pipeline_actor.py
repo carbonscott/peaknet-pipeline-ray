@@ -275,15 +275,27 @@ class PeakNetPipelineActorBase:
         """
         with nvtx.range(f"ray_actor_stream_processing_gpu_{self.gpu_id}"):
             logging.info(f"Actor {self.gpu_id}: Starting streaming from queue")
+            logging.info(f"Actor {self.gpu_id}: q1_manager type={type(q1_manager).__name__}, "
+                        f"shards={getattr(q1_manager, 'num_shards', 'N/A')}, "
+                        f"shard_actors={len(getattr(q1_manager, 'shard_actors', []))}, "
+                        f"poll_timeout={poll_timeout}, max_empty_polls={max_empty_polls}")
 
             processed_count = 0
             consecutive_empty_polls = 0
             start_time = time.time()
             last_output_data = None
+            _debug_logged = False
 
             while True:
                 # Pull single batch from queue (non-blocking with short timeout)
                 batch_data = q1_manager.get(timeout=poll_timeout)
+
+                if not _debug_logged and batch_data is not None:
+                    logging.info(f"Actor {self.gpu_id}: First batch received! type={type(batch_data).__name__}")
+                    _debug_logged = True
+                elif not _debug_logged and consecutive_empty_polls > 0 and consecutive_empty_polls % 1000 == 0:
+                    # Log every 1000 empty polls to show the actor is alive
+                    logging.info(f"Actor {self.gpu_id}: Still polling Q1 (empty_polls={consecutive_empty_polls})")
 
                 if batch_data is None:
                     # Queue is empty

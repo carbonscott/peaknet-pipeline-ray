@@ -17,7 +17,7 @@ import uuid
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-from pynng import Pull0
+import zmq
 
 from ..config.schemas import DataSourceConfig, PreprocessingMetadata
 from ..utils.queue import ShardedQueueManager
@@ -144,15 +144,23 @@ class SocketProducer:
             if self.socket:
                 self.socket.close()
 
-            # Use Pull0(listen=address) pattern like the working pull script
-            self.socket = Pull0(listen=self.socket_address)
+            self._zmq_context = zmq.Context()
+            self.socket = self._zmq_context.socket(zmq.PULL)
+            # Set recv timeout so we can log diagnostic messages while waiting
+            self.socket.setsockopt(zmq.RCVTIMEO, 10000)  # 10s timeout for diagnostics
 
-            logging.info(f"Producer {self.producer_id}: Listening on {self.socket_address}")
+            # Bind on 0.0.0.0 (all interfaces) so remote PUSH sockets can reach us
+            from urllib.parse import urlparse
+            parsed = urlparse(self.socket_address)
+            bind_address = f"tcp://0.0.0.0:{parsed.port}"
+            self.socket.bind(bind_address)
+
+            logging.info(f"Producer {self.producer_id}: Listening on {bind_address} (advertised as {self.socket_address})")
             return True
 
-        except Exception as e:
+        except zmq.ZMQError as e:
             self.stats.connection_retries += 1
-            logging.error(f"Producer {self.producer_id}: Failed to connect to {self.socket_address}: {e}")
+            logging.error(f"Producer {self.producer_id}: Failed to bind {self.socket_address}: {e}")
             return False
 
     def _receive_raw_bytes(self) -> Optional[bytes]:
@@ -162,15 +170,23 @@ class SocketProducer:
             Raw bytes data or None if error
         """
         try:
-            # Block until data arrives - this is the ONLY blocking operation
+            # Block until data arrives (with RCVTIMEO timeout for diagnostics)
             raw_bytes = self.socket.recv()
 
             self.stats.packets_received += 1
             self.stats.bytes_received += len(raw_bytes)
 
+            if self.stats.packets_received == 1:
+                logging.info(f"Producer {self.producer_id}: First packet received! ({len(raw_bytes)} bytes)")
+
             return raw_bytes
 
-        except Exception as e:
+        except zmq.Again:
+            # RCVTIMEO expired — no data yet, log and retry
+            logging.info(f"Producer {self.producer_id}: Waiting for data on {self.socket_address} (no data after 10s)")
+            return self._receive_raw_bytes()  # Retry
+
+        except zmq.ZMQError as e:
             logging.error(f"Producer {self.producer_id}: Socket receive error: {e}")
             return None
 
@@ -197,7 +213,10 @@ class SocketProducer:
 
         try:
             # Parse NumPy .npz format
+            t0 = time.time()
             arrays = np.load(BytesIO(raw_bytes))
+            t1 = time.time()
+            logging.info(f"Producer {self.producer_id}: np.load took {t1-t0:.2f}s, keys={arrays.files}")
 
             # Extract detector data using field mapping
             detector_data_key = self.fields.get("detector_data", "data")
@@ -206,6 +225,7 @@ class SocketProducer:
                 raise ValueError(f"Detector data key '{detector_data_key}' not found in .npz. Available keys: {arrays.files}")
 
             detector_data = arrays[detector_data_key]
+            logging.info(f"Producer {self.producer_id}: detector_data shape={detector_data.shape}, dtype={detector_data.dtype}")
 
             # Extract physics metadata (timestamp, photon_wavelength)
             physics_metadata = {}
@@ -238,16 +258,20 @@ class SocketProducer:
                 raise ValueError(f"Unexpected detector data shape: {detector_data.shape}. Expected (B, C, H, W) format from preprocessed producer")
 
             # Extract individual (C, H, W) samples from (B, C, H, W) batch
+            t2 = time.time()
             cpu_tensors = [torch.from_numpy(detector_data[i].astype(np.float32))
                          for i in range(detector_data.shape[0])]
-
-            logging.debug(
-                f"Producer {self.producer_id}: Parsed .npz data -> {len(cpu_tensors)} tensors, "
-                f"each with shape {cpu_tensors[0].shape if cpu_tensors else 'empty'}"
+            t3 = time.time()
+            logging.info(
+                f"Producer {self.producer_id}: tensor conversion took {t3-t2:.2f}s -> {len(cpu_tensors)} tensors, "
+                f"each shape {cpu_tensors[0].shape if cpu_tensors else 'empty'}"
             )
 
             # Create ObjectRefs for each tensor ONCE
+            t4 = time.time()
             tensor_refs = [ray.put(tensor) for tensor in cpu_tensors]
+            t5 = time.time()
+            logging.info(f"Producer {self.producer_id}: ray.put x{len(tensor_refs)} took {t5-t4:.2f}s")
 
             # Create batch ID
             if self.deterministic:
@@ -344,14 +368,14 @@ class SocketProducer:
                     continue
 
                 # STEP 3: Push to queue directly with backpressure retry (NO extra ray.put()!)
+                logging.info(f"Producer {self.producer_id}: Pushing batch {self.batch_counter} to Q1 ({len(data)} tensors)")
                 backoff_delay = 0.001  # Start with 1ms delay
                 while True:
                     success = queue_manager.put(data)  # Direct put - data already contains ObjectRefs!
                     if success:
                         self.stats.batches_generated += 1
-                        logging.debug(
-                            f"Producer {self.producer_id}: Pushed batch {self.batch_counter} "
-                            f"({len(data)} {'tensors' if isinstance(data, ParsedSocketData) else 'bytes'})"
+                        logging.info(
+                            f"Producer {self.producer_id}: Successfully pushed batch {self.batch_counter} to Q1"
                         )
                         break
 
@@ -386,6 +410,8 @@ class SocketProducer:
             # Clean up socket connection
             if self.socket:
                 self.socket.close()
+            if hasattr(self, '_zmq_context'):
+                self._zmq_context.term()
 
         # Register completion with coordinator
         producer_id_str = f"producer_{self.producer_id}"
